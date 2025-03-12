@@ -26,7 +26,7 @@ class NFCHandlerThread(QThread):
     operation_complete = pyqtSignal(bool, str)
 
     # Emitted with the updated list of AIDs after a successful install/uninstall
-    installed_apps_updated = pyqtSignal(list)
+    installed_apps_updated = pyqtSignal(dict)
 
     def __init__(self, selected_reader_name=None, parent=None):
         """
@@ -153,32 +153,95 @@ class NFCHandlerThread(QThread):
             return f"Memory Error: {e}"
 
     def get_installed_apps(self):
-        """Parse 'APP:' lines from 'gp --list' to find installed AIDs."""
+        """
+        Parse gp --list for both PKG blocks (which contain 'Version: X' + 'Applet: Y')
+        and APP lines (which show truly installed apps).
+        Returns a dict: { AID_uppercase: version_string_or_None, ... }
+        """
         if not self.selected_reader_name:
             self.status_update.emit("No reader selected for get_installed_apps.")
-            return []
+            return {}
 
         try:
             cmd = [*self.gp[os.name], "--list", "-r", self.selected_reader_name]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 self.status_update.emit(f"Error listing apps: {result.stderr}")
-                return []
+                return {}
 
-            installed = []
-            for line in result.stdout.splitlines():
+            lines = result.stdout.splitlines()
+
+            # Data structures for PKG -> version, applets, etc.
+            pkg_app_versions = {}  # Maps "AID-of-Applet" -> "version"
+            current_pkg_version = None
+            parsing_pkg_block = False
+
+            # We'll also track all "APP: ..." lines, which represent installed applets
+            installed_set = set()
+
+            for line in lines:
                 line = line.strip()
+
+                # Detect start of a PKG block
+                if line.startswith("PKG:"):
+                    # "PKG: A000000308000010 (LOADED)" etc.
+                    # Reset for a new package
+                    parsing_pkg_block = True
+                    current_pkg_version = None
+                    continue
+
+                if parsing_pkg_block:
+                    # Inside a package block until we hit next "PKG:", "APP:", or blank
+                    if not line or line.startswith("PKG:") or line.startswith("APP:"):
+                        # done with current pkg block
+                        parsing_pkg_block = False
+                        # If this line starts with APP: or PKG:, re-process it in next iteration
+                        if line.startswith("APP:"):
+                            # We'll handle the APP line after the loop continues
+                            pass
+                    else:
+                        # Possibly lines like "Version:  1.0" or "Applet:   A000000308000010000100"
+                        if "Version:" in line:
+                            # e.g. "Version:  1.0"
+                            # parse out version number
+                            parts = line.split("Version:", 1)
+                            version_str = parts[1].strip()  # e.g. "1.0"
+                            current_pkg_version = version_str
+                        elif "Applet:" in line:
+                            # e.g. "Applet:   A000000308000010000100"
+                            # parse out applet AID
+                            parts = line.split("Applet:", 1)
+                            raw_aid = parts[1].strip()
+                            # Normalize the AID (uppercase, no spaces)
+                            norm_aid = raw_aid.replace(" ", "").upper()
+                            pkg_app_versions[norm_aid] = current_pkg_version
+                    # If we haven't returned or continued, keep parsing lines in this block
+                    if line.startswith("APP:"):
+                        # We'll handle "APP:" lines below anyway
+                        pass
+
+                # If the line is an "APP:" line:
                 if line.startswith("APP:"):
+                    # e.g. "APP: A000000308000010000100 (SELECTABLE)"
                     parts = line.split()
                     if len(parts) >= 2:
                         raw_aid = parts[1]
-                        normalized = raw_aid.replace(" ", "").upper()
-                        installed.append(normalized)
-            return installed
+                        norm_aid = raw_aid.replace(" ", "").upper()
+                        installed_set.add(norm_aid)
+
+            # Now build a dictionary {aid: version_string or None} for installed apps
+            installed_apps = {}
+            for aid in installed_set:
+                if aid in pkg_app_versions:
+                    installed_apps[aid] = pkg_app_versions[aid]
+                else:
+                    installed_apps[aid] = None
+
+            return installed_apps
 
         except Exception as e:
             self.status_update.emit(f"Exception listing apps: {e}")
-            return []
+            return {}
 
     # ----------------------------
     #  Installation and Uninstall
