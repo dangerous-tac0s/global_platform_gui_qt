@@ -62,6 +62,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
         super().__init__()
         self._selected_cap = None
         self._override_instance = None
+        self.auto_import_plugins('flexsecure-applets')
 
     @property
     def name(self) -> str:
@@ -118,14 +119,3 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
         if self._override_instance:
             return self._override_instance.get_result()
         return {}
-
-# Auto-import sub-file overrides (e.g. openjavacardndef_full.py) from this folder.
-this_dir = os.path.dirname(__file__)
-for fname in os.listdir(this_dir):
-    if fname.endswith(".py") and not fname.startswith("__"):
-        mod_name = fname[:-3]
-        full_mod_path = f"repos.flexsecure_applets.{mod_name}"
-        try:
-            importlib.import_module(full_mod_path)
-        except Exception as e:
-            print(f"Error importing {full_mod_path}: {e}")

@@ -54,16 +54,17 @@ class BaseAppletPlugin(ABC):
         pass
 
     @classmethod
-    def auto_import_plugins(cls, directory, package):
+    def auto_import_plugins(cls, package):
         """
         Dynamically import all .py modules from the specified directory into the given package.
         :param directory: The directory to search for .py files.
         :param package: The package path for dynamic imports.
         """
-        for fname in os.listdir(directory):
+        this_dir = os.path.join(os.getcwd(), 'repos', package, os.sep)
+        for fname in os.listdir(this_dir):
             if fname.endswith(".py") and not fname.startswith("__"):
                 mod_name = fname[:-3]  # Strip .py
-                full_mod_path = f"{package}.{mod_name}"
+                full_mod_path = f"repos.{package}.{mod_name}"
                 try:
                     importlib.import_module(full_mod_path)
                 except Exception as e:
