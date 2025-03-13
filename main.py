@@ -134,6 +134,7 @@ class GPManagerApp(QWidget):
         self.layout.addLayout(reader_layout)
 
         # Installed / Available lists
+        self.installed_app_names = []
         self.installed_list = QListWidget()
         self.available_list = QListWidget()
 
@@ -207,7 +208,7 @@ class GPManagerApp(QWidget):
     def populate_available_list(self):
         self.available_list.clear()
         for cap_name, (plugin_name, url) in self.available_apps_info.items():
-            if cap_name in unsupported_apps:
+            if cap_name in unsupported_apps or cap_name in self.installed_app_names:
                 continue
             self.available_list.addItem(cap_name)
 
@@ -230,6 +231,7 @@ class GPManagerApp(QWidget):
 
         self.reader_dropdown.setEnabled(True)
         self.reader_dropdown.addItems(readers_list)
+        self.status_label.setText(f"Found {len(readers_list)} reader{'s' if len(readers_list)>1 else ''}.")
 
         if self.nfc_thread.selected_reader_name not in readers_list:
             self.nfc_thread.selected_reader_name = readers_list[0]
@@ -435,6 +437,7 @@ class GPManagerApp(QWidget):
         We must iterate installed_aids.keys() or items().
         """
         self.installed_list.clear()
+        self.installed_app_names = []
 
         for raw_aid in installed_aids.keys():
             # e.g. 'A000000308000010000100'
@@ -465,13 +468,18 @@ class GPManagerApp(QWidget):
 
             # Display either the cap name or "Unknown"
             if matched_cap:
+                self.installed_app_names.append(matched_cap)
                 display_text = matched_cap
             elif matched_plugin_name:
                 display_text = f"Unknown from {matched_plugin_name}: {raw_aid}"
             else:
                 display_text = f"Unknown: {raw_aid}"
+            # TODO: Handle showing versions.
+            # if version:
+            #     display_text += f" - v{version}"
 
             self.installed_list.addItem(display_text)
+        self.populate_available_list()
 
     #
     #  Utility

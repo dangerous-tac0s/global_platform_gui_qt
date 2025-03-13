@@ -334,7 +334,6 @@ class NFCHandlerThread(QThread):
             if force:
                 cmd.append("-f")
             cmd.extend([cap_file_path, "-r", self.selected_reader_name])
-            print(cmd)
 
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
