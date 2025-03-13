@@ -6,6 +6,8 @@ from smartcard.Exceptions import NoCardException, CardConnectionException
 from smartcard.util import toHexString
 from measure import get_memory
 
+DEFAULT_KEY = "404142434445464748494A4B4C4D4E4F"
+
 class NFCHandlerThread(QThread):
     """
     Monitors the chosen reader for card presence.
@@ -33,6 +35,7 @@ class NFCHandlerThread(QThread):
         :param selected_reader_name: The currently chosen reader (or None at start).
         """
         super().__init__(parent)
+        self.key = DEFAULT_KEY
         self.selected_reader_name = selected_reader_name
 
         # Thread run loop control
@@ -45,9 +48,10 @@ class NFCHandlerThread(QThread):
 
         # OS-specific gp command
         self.gp = {
-            "nt":   ["gp.exe"],
-            "posix": ["java", "-jar", "gp.jar"]
+            "nt":   ["gp.exe", "-k", self.key],
+            "posix": ["java", "-jar", "gp.jar", "-k", self.key]
         }
+
 
     def run(self):
         """Main loop for detecting readers/cards. (Unchanged from your existing version.)"""
@@ -262,7 +266,7 @@ class NFCHandlerThread(QThread):
                 installed = self.get_installed_apps()
                 self.installed_apps_updated.emit(installed)
                 mem = self.get_memory_status()
-                uid = self.current_uid()
+                uid = self.current_uid
                 self.status_update.emit(f"UID: {uid} | {mem}")
             else:
                 err_msg = f"Install failed: {result.stderr}"
@@ -273,9 +277,10 @@ class NFCHandlerThread(QThread):
             self.status_update.emit(err_msg)
             self.operation_complete.emit(False, err_msg)
         finally:
+            if os.path.exists(cap_file_path):
+                os.remove(cap_file_path)
             mem = self.get_memory_status()
-            uid = self.current_uid()
-            self.status_update.emit(f"UID: {uid} | {mem}")
+            self.status_update.emit(f"UID: {self.current_uid} | {mem}")
 
     def uninstall_app(self, aid, force=False):
         """
@@ -310,8 +315,7 @@ class NFCHandlerThread(QThread):
             self.operation_complete.emit(False, err_msg)
         finally:
             mem = self.get_memory_status()
-            uid = self.current_uid()
-            self.status_update.emit(f"UID: {uid} | {mem}")
+            self.status_update.emit(f"UID: {self.current_uid} | {mem}")
 
     def uninstall_app_by_cap(self, cap_file_path, fallback_aid=None, force=False):
         """
@@ -330,6 +334,7 @@ class NFCHandlerThread(QThread):
             if force:
                 cmd.append("-f")
             cmd.extend([cap_file_path, "-r", self.selected_reader_name])
+            print(cmd)
 
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
@@ -361,7 +366,11 @@ class NFCHandlerThread(QThread):
                 self.uninstall_app(fallback_aid, force=force)
             else:
                 self.operation_complete.emit(False, err_msg)
-
+        finally:
+            if os.path.exists(cap_file_path):
+                os.remove(cap_file_path)
+            mem = self.get_memory_status()
+            self.status_update.emit(f"UID: {self.current_uid} | {mem}")
     def stop(self):
         """Signal the loop to exit gracefully."""
         self.running = False

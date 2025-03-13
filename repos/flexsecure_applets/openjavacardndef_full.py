@@ -2,47 +2,54 @@
 
 from PyQt5.QtWidgets import (
     QDialog, QTabWidget, QWidget, QVBoxLayout, QFormLayout,
-    QLabel, QComboBox, QCheckBox, QLineEdit, QHBoxLayout, QPushButton, QTextEdit
+    QLabel, QComboBox, QCheckBox, QPushButton, QHBoxLayout, QTextEdit
 )
 from PyQt5.QtCore import Qt
 
-from . import FLEXSECURE_AID_MAP  # same folder, relative import
-from base_plugin import BaseAppletPlugin
+# Import the 'AppletOverrideBase' and the dictionary or function for registering overrides.
+from . import  override_map
+from applet_override_base import AppletOverrideBase
+
+def register_override(cap_name, override_cls):
+    """
+    Helper function to insert an override class into 'override_map'
+    so that 'FlexsecureAppletsPlugin' can find it.
+    """
+    override_map[cap_name] = override_cls
 
 
-class OpenJavaCardNDEFPlugin(BaseAppletPlugin):
+class OpenJavaCardNDEFOverride(AppletOverrideBase):
+    """
+    An override for the 'openjavacard-ndef-full.cap' applet
+    that requires a special multi-tab config UI, plus optional version checks.
+    """
+
     min_javacard_version = (3, 0, 4)  # e.g. requires JavaCard 3.0.4 or higher
 
-    @property
-    def name(self):
-        return "openjavacard-ndef-full"
-
-    def pre_install(self, **kwargs):
-        # We'll check if the card's OS version is >= min_javacard_version
+    def pre_install(self, plugin, **kwargs):
+        """
+        We'll check if the card's OS version is >= min_javacard_version
+        (Optional logic - depends on how you store the card version).
+        """
         nfc_thread = kwargs.get("nfc_thread")
         if not nfc_thread:
             return  # or raise an error if we must have it
 
+        # Example approach - skip if we don't parse version
         card_ver = getattr(nfc_thread, "card_os_version", None)
         if card_ver is None:
-            # nfc_thread might attempt to parse it
-            card_ver = nfc_thread.get_javacard_version(nfc_thread.selected_reader_name)
-            nfc_thread.card_os_version = card_ver
+            # If there's a method like nfc_thread.get_javacard_version(...), call it
+            # or skip if you haven't implemented that
+            pass
 
-        if card_ver is None:
-            raise Exception("Could not detect JavaCard OS version; cannot proceed.")
+        # If we wanted to do a compare:
+        # if card_ver < self.min_javacard_version:
+        #     raise Exception(f"Requires JavaCard {self.min_javacard_version}, but card is {card_ver}.")
 
-        if card_ver < self.min_javacard_version:
-            raise Exception(f"Requires JavaCard {self.min_javacard_version}, but card is {card_ver}.")
-
-    def create_dialog(self, parent=None):
+    def create_dialog(self, plugin, parent=None):
         """
-        Create and return a QDialog with 4 tabs:
-          1) Basic
-          2) Record
-          3) Advanced
-          4) Raw
-        We'll store user input in self._result or in the dialog as needed.
+        Build a multi-tab QDialog for NDEF configuration.
+        'plugin' is the parent plugin (FlexsecureAppletsPlugin).
         """
         dlg = QDialog(parent)
         dlg.setWindowTitle("NDEF Configuration")
@@ -51,22 +58,22 @@ class OpenJavaCardNDEFPlugin(BaseAppletPlugin):
         self.tab_widget = QTabWidget()
         layout.addWidget(self.tab_widget)
 
-        # 1) Basic tab
+        # Basic
         self.basic_tab = QWidget()
         self.build_basic_tab()
         self.tab_widget.addTab(self.basic_tab, "Basic")
 
-        # 2) Record tab
+        # Record
         self.record_tab = QWidget()
         self.build_record_tab()
         self.tab_widget.addTab(self.record_tab, "Record")
 
-        # 3) Advanced tab
+        # Advanced
         self.advanced_tab = QWidget()
         self.build_advanced_tab()
         self.tab_widget.addTab(self.advanced_tab, "Advanced")
 
-        # 4) Raw tab
+        # Raw
         self.raw_tab = QWidget()
         self.build_raw_tab()
         self.tab_widget.addTab(self.raw_tab, "Raw")
@@ -83,11 +90,12 @@ class OpenJavaCardNDEFPlugin(BaseAppletPlugin):
 
         dlg.setLayout(layout)
         self._dialog = dlg
+
         return dlg
 
     def build_basic_tab(self):
-        layout = QFormLayout()
-        self.basic_tab.setLayout(layout)
+        from PyQt5.QtWidgets import QFormLayout, QLabel, QComboBox, QCheckBox
+        layout = QFormLayout(self.basic_tab)
 
         # Container size combobox
         self.size_combo = QComboBox()
@@ -99,8 +107,8 @@ class OpenJavaCardNDEFPlugin(BaseAppletPlugin):
         layout.addRow(QLabel("Write Once:"), self.write_once_check)
 
     def build_record_tab(self):
-        layout = QFormLayout()
-        self.record_tab.setLayout(layout)
+        from PyQt5.QtWidgets import QFormLayout, QLabel, QComboBox, QTextEdit
+        layout = QFormLayout(self.record_tab)
 
         self.record_type_combo = QComboBox()
         self.record_type_combo.addItems(["text", "uri", "mime", "smart poster"])
@@ -110,8 +118,8 @@ class OpenJavaCardNDEFPlugin(BaseAppletPlugin):
         layout.addRow(QLabel("Payload:"), self.record_payload_edit)
 
     def build_advanced_tab(self):
-        layout = QFormLayout()
-        self.advanced_tab.setLayout(layout)
+        from PyQt5.QtWidgets import QFormLayout, QLabel, QComboBox
+        layout = QFormLayout(self.advanced_tab)
 
         # Read permission
         self.read_perm_combo = QComboBox()
@@ -124,8 +132,8 @@ class OpenJavaCardNDEFPlugin(BaseAppletPlugin):
         layout.addRow(QLabel("Write Permission:"), self.write_perm_combo)
 
     def build_raw_tab(self):
-        layout = QFormLayout()
-        self.raw_tab.setLayout(layout)
+        from PyQt5.QtWidgets import QFormLayout, QLabel, QTextEdit
+        layout = QFormLayout(self.raw_tab)
 
         self.raw_text_edit = QTextEdit()
         self.raw_text_edit.setPlaceholderText("Enter hex param string (optional)")
@@ -181,24 +189,18 @@ class OpenJavaCardNDEFPlugin(BaseAppletPlugin):
 
     def get_result(self):
         """Return the dictionary of final user-chosen data."""
-        return self._result
+        return getattr(self, "_result", {})
 
-    def pre_install(self, **kwargs):
+    def post_install(self, plugin, **kwargs):
         """
-        If you need to do anything prior to installing, do it here.
-        For instance, check if the card meets some condition, generate keys, etc.
+        If you need to do additional steps after the standard gp install,
+        do it here (like loading data, second gp command with param string, etc.)
         """
-        # Example: print("Running pre-install steps for NDEF...")
-        pass
-
-    def post_install(self, **kwargs):
-        """
-        If you need to do additional steps after the standard gp install, do it here.
-        E.g. load some data, run gp --params with the param_string, etc.
-        """
-        # Example:
-        result = self._result
+        result = getattr(self, "_result", {})
         if result and result["source"] == "ui":
             param_string = result["param_string"]
             # Possibly run a second gp command with --params param_string
-            pass
+            # e.g. plugin.call_gp_params(...)
+
+# Finally, register this override
+register_override("openjavacard-ndef-full.cap", OpenJavaCardNDEFOverride)

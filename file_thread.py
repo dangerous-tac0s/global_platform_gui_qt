@@ -3,7 +3,6 @@ import os
 import tempfile
 from PyQt5.QtCore import QThread, pyqtSignal
 
-
 class FileHandlerThread(QThread):
     """
     Downloads a file from a given URL and emits signals for progress and completion.
@@ -14,22 +13,29 @@ class FileHandlerThread(QThread):
     # Emitted upon successful download, providing the local file path
     download_complete = pyqtSignal(str)
 
-    # Alternatively, you can emit an error signal with the exception or message.
-    # Or simply re-use download_complete in an error path with e.g. empty string.
+    # Emitted upon error, providing an error message
     download_error = pyqtSignal(str)
 
-    def __init__(self, app_name, download_url, parent=None):
+    def __init__(self, app_name, download_url, output_dir=None, parent=None):
+        """
+        :param app_name: the filename to save as (e.g. "myApplet.cap")
+        :param download_url: the URL to fetch
+        :param output_directory: optional folder to place the downloaded file;
+                                 defaults to system temp if None
+        :param parent: optional QThread parent
+        """
         super().__init__(parent)
         self.app_name = app_name
         self.download_url = download_url
 
-        # You might allow passing in a custom output directory if needed
-        self.output_dir = tempfile.gettempdir()  # cross-platform temp folder
+        # If no custom output directory is provided, default to temp folder
+        if output_dir is None:
+            self.output_dir = tempfile.gettempdir()
+        else:
+            self.output_dir = output_dir
 
-        # If you want a custom chunk size
+        # Optional: chunk size, timeout
         self.chunk_size = 8192
-
-        # If you want a timeout in seconds
         self.timeout = 15
 
     def run(self):
@@ -57,30 +63,25 @@ class FileHandlerThread(QThread):
                     f.write(chunk)
                     downloaded += len(chunk)
 
-                    # If we know total size, emit progress %.
+                    # If we know total size, emit progress
                     if total_length:
                         percent = int(downloaded * 100 / total_length)
                         self.download_progress.emit(percent)
 
-            # Emit 100% at the end just to be sure
+            # Emit 100% at the end to ensure the UI shows completion
             self.download_progress.emit(100)
 
-            # Done, emit success
+            # Emit success
             self.download_complete.emit(file_path)
 
         except Exception as e:
-            # If there's an error, optionally remove partial file
+            # Optionally remove partial file on error
             if os.path.exists(file_path):
                 try:
                     os.remove(file_path)
                 except:
-                    pass  # best effort
+                    pass  # best-effort cleanup
 
             error_msg = f"Download Error: {e}"
             print(error_msg)
-
-            # Either emit a separate error signal:
             self.download_error.emit(error_msg)
-
-            # or re-use download_complete with something like an empty path:
-            # self.download_complete.emit("")

@@ -1,50 +1,131 @@
 # /repos/flexsecure_applets/__init__.py
 
+import os
+import importlib
+import requests
+
+from base_plugin import BaseAppletPlugin
+
 """
-This __init__.py makes /repos/flexsecureapplets/ a Python package.
-Here, we can store shared variables, functions, or imports
-that other code can access by importing 'repos.flexsecureapplets'.
+flexsecure-applets plugin: Manages all .cap files and their associated AIDs for the
+'DangerousThings/flexsecure-applets' GitHub repository. This plugin expects every
+applet to have an entry in the AID map.
 """
 
-# The GitHub info for the entire 'flexsecureapplets' repo
+# AID map: maps cap filenames to their corresponding AID strings.
+FLEXSECURE_AID_MAP = {
+    "javacard-memory.cap":         "A0000008466D656D6F727901",
+    "keycard.cap":                 "A0000008040001",
+    "openjavacard-ndef-full.cap":  "D2760000850101",
+    "SatoChip.cap":                "5361746F4368697000",
+    "Satodime.cap":                "5361746F44696D6500",
+    "SeedKeeper.cap":              "536565644B656570657200",
+    "SmartPGPApplet-default.cap":  "D276000124010304000A000000000000",
+    "U2FApplet.cap":               "A0000006472F0002",
+    "vivokey-otp.cap":             "A0000005272101014150455801",
+    "YkHMACApplet.cap":            "A000000527200101"
+}
+
+# GitHub repository information for this plugin.
 OWNER = "DangerousThings"
 REPO_NAME = "flexsecure-applets"
 
-# A dictionary of recognized .cap => AID for this entire repo
-FLEXSECURE_AID_MAP = {
-    # Just some examples, you can fill in with your real data
-    "openjavacard-ndef-full.cap": "D2760000850101",
-    "FIDO2.cap": "A0000006472F000101",
-    # ...
-}
+# Dictionary to store per-cap override classes.
+override_map = {}
 
-# If you have a function that fetches the latest release from
-# 'flexsecure-applets', you could define it here, so your main code
-# can do: from repos.flexsecure_applets import fetch_flexsecure_latest_release
-
-def fetch_flexsecure_latest_release():
+def fetch_flexsecure_latest_release() -> dict[str, str]:
     """
-    Example function that hits the GH API for flexsecure-applets only.
-    A specialized version of your 'fetch_latest_release_assets'.
+    Fetch the latest release from GitHub for the 'DangerousThings/flexsecure-applets' repo.
+    Returns a dict mapping { cap_filename: download_url } for assets recognized in FLEXSECURE_AID_MAP.
     """
-    import requests
     url = f"https://api.github.com/repos/{OWNER}/{REPO_NAME}/releases/latest"
-    response = requests.get(url)
-    response.raise_for_status()
-    data = response.json()
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
     assets = data.get("assets", [])
     results = {}
     for asset in assets:
         name = asset["name"]
-        download_url = asset["browser_download_url"]
-        results[name] = download_url
+        dl_url = asset["browser_download_url"]
+        if name in FLEXSECURE_AID_MAP:
+            results[name] = dl_url
     return results
 
-# If you want to re-export your plugin classes here, for example:
-from .openjavacardndef_full import OpenJavaCardNDEFPlugin
-# from .fido2 import Fido2Plugin
-# etc.
-# Then other code can do:
-#   from repos.flexsecure_applets import OpenJavaCardNDEFPlugin
-#
-# But this is optional, depending how you want to structure your imports.
+class FlexsecureAppletsPlugin(BaseAppletPlugin):
+    """
+    The single plugin for the entire 'flexsecure-applets' repository.
+    It uses FLEXSECURE_AID_MAP to associate CAP filenames with AIDs and delegates
+    any specialized logic (pre_install, dialog, post_install) to per-cap overrides
+    if one exists.
+    """
+    def __init__(self):
+        super().__init__()
+        self._selected_cap = None
+        self._override_instance = None
+
+    @property
+    def name(self) -> str:
+        return "flexsecure-applets"
+
+    def fetch_available_caps(self) -> dict[str, str]:
+        return fetch_flexsecure_latest_release()
+
+    def set_cap_name(self, cap_name: str):
+        """
+        Called when a .cap is selected for install/uninstall.
+        If an override is registered for this cap, instantiate it.
+        """
+        self._selected_cap = cap_name
+        if cap_name in override_map:
+            override_cls = override_map[cap_name]
+            self._override_instance = override_cls()
+        else:
+            self._override_instance = None
+
+    def get_cap_filename(self) -> str:
+        return self._selected_cap or ""
+
+    def get_aid_for_cap(self, cap_name: str) -> str | None:
+        return FLEXSECURE_AID_MAP.get(cap_name)
+
+    def get_cap_for_aid(self, raw_aid: str) -> str | None:
+        norm = raw_aid.upper().replace(" ", "")
+        for c, a in FLEXSECURE_AID_MAP.items():
+            if a.upper().replace(" ", "") == norm:
+                return c
+        return None
+
+    def get_aid_list(self) -> list[str]:
+        if not self._selected_cap:
+            return []
+        a = self.get_aid_for_cap(self._selected_cap)
+        return [a] if a else []
+
+    def pre_install(self, **kwargs):
+        if self._override_instance:
+            self._override_instance.pre_install(self, **kwargs)
+
+    def post_install(self, **kwargs):
+        if self._override_instance:
+            self._override_instance.post_install(self, **kwargs)
+
+    def create_dialog(self, parent=None):
+        if self._override_instance:
+            return self._override_instance.create_dialog(self, parent)
+        return None
+
+    def get_result(self):
+        if self._override_instance:
+            return self._override_instance.get_result()
+        return {}
+
+# Auto-import sub-file overrides (e.g. openjavacardndef_full.py) from this folder.
+this_dir = os.path.dirname(__file__)
+for fname in os.listdir(this_dir):
+    if fname.endswith(".py") and not fname.startswith("__"):
+        mod_name = fname[:-3]
+        full_mod_path = f"repos.flexsecure_applets.{mod_name}"
+        try:
+            importlib.import_module(full_mod_path)
+        except Exception as e:
+            print(f"Error importing {full_mod_path}: {e}")
