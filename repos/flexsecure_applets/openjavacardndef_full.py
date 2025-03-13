@@ -26,6 +26,13 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
 
     min_javacard_version = (3, 0, 4)  # e.g. requires JavaCard 3.0.4 or higher
 
+    perm_map = {
+        "open access": "00",
+        "no access": "FF",
+        "write once": "F1",
+        "contact only": "F0",
+    }
+
     def pre_install(self, plugin, **kwargs):
         """
         We'll check if the card's OS version is >= min_javacard_version
@@ -121,15 +128,24 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         from PyQt5.QtWidgets import QFormLayout, QLabel, QComboBox
         layout = QFormLayout(self.advanced_tab)
 
+        self.rw_label = QLabel()
+        self.rw_label.setText(f"81 00 00")
+        layout.addRow(self.rw_label)
+
         # Read permission
         self.read_perm_combo = QComboBox()
         self.read_perm_combo.addItems(["open access", "no access", "write once", "contact only"])
+        self.read_perm_combo.currentIndexChanged.connect(self.on_rw_value_change)
         layout.addRow(QLabel("Read Permission:"), self.read_perm_combo)
 
         # Write permission
         self.write_perm_combo = QComboBox()
         self.write_perm_combo.addItems(["open access", "no access", "write once", "contact only"])
+        self.write_perm_combo.currentIndexChanged.connect(self.on_rw_value_change)
         layout.addRow(QLabel("Write Permission:"), self.write_perm_combo)
+
+    def on_rw_value_change(self):
+        self.rw_label.setText(f"81 {self.perm_map[self.read_perm_combo.currentText()]} {self.perm_map[self.write_perm_combo.currentText()]}")
 
     def build_raw_tab(self):
         from PyQt5.QtWidgets import QFormLayout, QLabel, QTextEdit
@@ -153,6 +169,10 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
                 "source": "raw"
             }
         else:
+            # TODO: Need an option to ignore things such as the basic tab
+            #   eg, data is set, we don't *need* 82 02 -- but it can be used
+            #           override the container size
+
             # Build param from Basic/Record/Advanced
             size_str = self.size_combo.currentText()  # e.g. "1kB"
             size_kb = int(size_str[:-2])
@@ -162,21 +182,16 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
             size_hex = f"{size_in_bytes:04X}"
 
             # Suppose you have your old “permissions_text_to_hex” map:
-            perm_map = {
-                "open access": "00",
-                "no access": "FF",
-                "write once": "F1",
-                "contact only": "F0",
-            }
             read_val = self.read_perm_combo.currentText()
             write_val = self.write_perm_combo.currentText()
-            read_hex = perm_map.get(read_val, "00")
-            write_hex = perm_map.get(write_val, "00")
+            read_hex = self.perm_map.get(read_val, "00")
+            write_hex = self.perm_map.get(write_val, "00")
 
-            param_string = f"8102{read_hex}{write_hex}8202{size_hex}"
-
+            # Build 80 XX <data>
             record_type = self.record_type_combo.currentText()
             record_payload = self.record_payload_edit.toPlainText()
+
+            param_string = f"8102{read_hex}{write_hex}8202{size_hex}"
 
             self._result = {
                 "param_string": param_string,

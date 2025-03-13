@@ -265,7 +265,7 @@ class GPManagerApp(QWidget):
     #
     #  Download or use cached file
     #
-    def fetch_file(self, cap_name, on_complete):
+    def fetch_file(self, cap_name, on_complete, params=None):
         """
         Check if we've already downloaded the .cap to CAP_DOWNLOAD_DIR.
         If it doesn't exist locally, download it via FileHandlerThread.
@@ -285,7 +285,7 @@ class GPManagerApp(QWidget):
         self.downloader = FileHandlerThread(cap_name, dl_url, output_dir=CAP_DOWNLOAD_DIR)
 
         self.downloader.download_progress.connect(self.on_download_progress)
-        self.downloader.download_complete.connect(on_complete)
+        self.downloader.download_complete.connect(lambda file_path: on_complete(file_path, params))
         self.downloader.download_error.connect(self.on_download_error)
 
         self.download_bar.setRange(0, 100)
@@ -338,7 +338,7 @@ class GPManagerApp(QWidget):
                 self.current_plugin = plugin
                 result_data = plugin.get_result()
                 print("Plugin result:", result_data)
-                self.fetch_file(cap_name, self.on_install_download_complete)
+                self.fetch_file(cap_name, self.on_install_download_complete, params=result_data)
             elif dlg:
                 # user canceled
                 return
@@ -351,11 +351,11 @@ class GPManagerApp(QWidget):
             self.current_plugin = None
             self.fetch_file(cap_name, self.on_install_download_complete)
 
-    def on_install_download_complete(self, file_path):
+    def on_install_download_complete(self, file_path, params=None):
         self.download_bar.hide()
         self.download_bar.setValue(0)
         self.message_queue.add_message(f"Installing: {file_path}")
-        self.nfc_thread.install_app(file_path)
+        self.nfc_thread.install_app(file_path, params)
 
     #
     #  Uninstall Flow
@@ -395,7 +395,7 @@ class GPManagerApp(QWidget):
         else:
             self.message_queue.add_message(f"No plugin found for {cap_name}")
 
-    def on_uninstall_download_complete(self, file_path):
+    def on_uninstall_download_complete(self, file_path, params=None):
         self.download_bar.hide()
         self.download_bar.setValue(0)
         self.message_queue.add_message(f"Uninstalling with {file_path}")

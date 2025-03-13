@@ -250,8 +250,7 @@ class NFCHandlerThread(QThread):
     # ----------------------------
     #  Installation and Uninstall
     # ----------------------------
-    def install_app(self, cap_file_path):
-        """Install using 'gp --install <cap_file_path>'."""
+    def install_app(self, cap_file_path, params=None):
         if not self.selected_reader_name:
             self.status_update.emit("No reader selected for install.")
             self.operation_complete.emit(False, "No reader selected.")
@@ -259,6 +258,8 @@ class NFCHandlerThread(QThread):
 
         try:
             cmd = [*self.gp[os.name], "--install", cap_file_path, "-r", self.selected_reader_name]
+            if params and "param_string" in params:
+                cmd.extend(["--params", params["param_string"]])
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 self.status_update.emit(f"Installed: {os.path.basename(cap_file_path)}")
@@ -277,6 +278,7 @@ class NFCHandlerThread(QThread):
             self.status_update.emit(err_msg)
             self.operation_complete.emit(False, err_msg)
         finally:
+            # TODO: Support caching
             if os.path.exists(cap_file_path):
                 os.remove(cap_file_path)
             mem = self.get_memory_status()
@@ -366,10 +368,12 @@ class NFCHandlerThread(QThread):
             else:
                 self.operation_complete.emit(False, err_msg)
         finally:
+            # TODO: Support caching
             if os.path.exists(cap_file_path):
                 os.remove(cap_file_path)
             mem = self.get_memory_status()
             self.status_update.emit(f"UID: {self.current_uid} | {mem}")
+
     def stop(self):
         """Signal the loop to exit gracefully."""
         self.running = False
