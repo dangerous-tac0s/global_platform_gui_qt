@@ -4,12 +4,23 @@ import os
 import tempfile
 import importlib
 
+from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QLabel, QPushButton,
-    QListWidget, QComboBox, QHBoxLayout, QGridLayout, QProgressBar,
-    QMessageBox, QFrame
+    QApplication,
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
+    QListWidget,
+    QComboBox,
+    QHBoxLayout,
+    QGridLayout,
+    QProgressBar,
+    QMessageBox,
+    QFrame,
+    QPlainTextEdit,
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QSize, QObject, QEvent
 
 from file_thread import FileHandlerThread
 from nfc_thread import NFCHandlerThread
@@ -23,11 +34,7 @@ os.makedirs(CAP_DOWNLOAD_DIR, exist_ok=True)
 #
 # If you still need to skip certain .cap files, keep them here.
 #
-unsupported_apps = [
-    "FIDO2.cap",
-    "openjavacard-ndef-tiny.cap",
-    "keycard.cap"
-]
+unsupported_apps = ["FIDO2.cap", "openjavacard-ndef-tiny.cap", "keycard.cap"]
 
 #
 # We'll define our base plugin interface
@@ -57,9 +64,9 @@ def load_plugins():
     for repo_name in os.listdir(repos_dir):
         repo_path = os.path.join(repos_dir, repo_name)
         if (
-                os.path.isdir(repo_path)
-                and not repo_name.startswith("__")
-                and not repo_name.startswith(".")
+            os.path.isdir(repo_path)
+            and not repo_name.startswith("__")
+            and not repo_name.startswith(".")
         ):
             # We check if there's an __init__.py in that folder
             init_file = os.path.join(repo_path, "__init__.py")
@@ -72,9 +79,9 @@ def load_plugins():
                     for attr_name in dir(mod):
                         attr = getattr(mod, attr_name)
                         if (
-                                isinstance(attr, type)
-                                and issubclass(attr, BaseAppletPlugin)
-                                and attr is not BaseAppletPlugin
+                            isinstance(attr, type)
+                            and issubclass(attr, BaseAppletPlugin)
+                            and attr is not BaseAppletPlugin
                         ):
                             instance = attr()
                             plugin_map[instance.name] = attr
@@ -119,11 +126,7 @@ class GPManagerApp(QWidget):
         self.layout.addWidget(self.status_label)
         self.message_queue = MessageQueue(self.status_label)
 
-        # Horizontal line
-        h_line = QFrame()
-        h_line.setFrameShape(QFrame.HLine)
-        h_line.setFrameShadow(QFrame.Sunken)
-        self.layout.addWidget(h_line)
+        self.layout.addWidget(horizontal_rule())
 
         # Reader selection row
         reader_layout = QHBoxLayout()
@@ -231,7 +234,9 @@ class GPManagerApp(QWidget):
 
         self.reader_dropdown.setEnabled(True)
         self.reader_dropdown.addItems(readers_list)
-        self.status_label.setText(f"Found {len(readers_list)} reader{'s' if len(readers_list)>1 else ''}.")
+        self.status_label.setText(
+            f"Found {len(readers_list)} reader{'s' if len(readers_list)>1 else ''}."
+        )
 
         if self.nfc_thread.selected_reader_name not in readers_list:
             self.nfc_thread.selected_reader_name = readers_list[0]
@@ -278,14 +283,20 @@ class GPManagerApp(QWidget):
             return
 
         if cap_name not in self.available_apps_info:
-            self.message_queue.add_message(f"No known plugin or download URL for {cap_name}")
+            self.message_queue.add_message(
+                f"No known plugin or download URL for {cap_name}"
+            )
             return
 
         plugin_name, dl_url = self.available_apps_info[cap_name]
-        self.downloader = FileHandlerThread(cap_name, dl_url, output_dir=CAP_DOWNLOAD_DIR)
+        self.downloader = FileHandlerThread(
+            cap_name, dl_url, output_dir=CAP_DOWNLOAD_DIR
+        )
 
         self.downloader.download_progress.connect(self.on_download_progress)
-        self.downloader.download_complete.connect(lambda file_path: on_complete(file_path, params))
+        self.downloader.download_complete.connect(
+            lambda file_path: on_complete(file_path, params)
+        )
         self.downloader.download_error.connect(self.on_download_error)
 
         self.download_bar.setRange(0, 100)
@@ -338,7 +349,9 @@ class GPManagerApp(QWidget):
                 self.current_plugin = plugin
                 result_data = plugin.get_result()
                 print("Plugin result:", result_data)
-                self.fetch_file(cap_name, self.on_install_download_complete, params=result_data)
+                self.fetch_file(
+                    cap_name, self.on_install_download_complete, params=result_data
+                )
             elif dlg:
                 # user canceled
                 return
@@ -402,13 +415,15 @@ class GPManagerApp(QWidget):
 
         if self.current_plugin:
             # Ask the plugin for its fallback AID list for the selected cap.
-            aids = self.current_plugin.get_aid_list() if hasattr(self.current_plugin, "get_aid_list") else []
+            aids = (
+                self.current_plugin.get_aid_list()
+                if hasattr(self.current_plugin, "get_aid_list")
+                else []
+            )
             fallback_aid = aids[0] if aids else None
             self.nfc_thread.uninstall_app_by_cap(file_path, fallback_aid=fallback_aid)
         else:
             self.nfc_thread.uninstall_app_by_cap(file_path)
-
-
 
     #
     #  Operation Complete
@@ -488,6 +503,27 @@ class GPManagerApp(QWidget):
         self.nfc_thread.stop()
         self.nfc_thread.wait()
         event.accept()
+
+
+def horizontal_rule():
+    h_line = QFrame()
+    h_line.setFrameShape(QFrame.HLine)
+    h_line.setFrameShadow(QFrame.Sunken)
+
+    return h_line
+
+
+class FocusFilter(QObject):
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+
+    def eventFilter(self, obj, event):
+        print("event filter")
+        print(event.type())
+        if event.type() == QEvent.FocusOut:
+            self.callback()
+        return super().eventFilter(obj, event)
 
 
 if __name__ == "__main__":

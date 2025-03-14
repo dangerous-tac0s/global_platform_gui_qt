@@ -9,12 +9,14 @@ from measure import get_memory
 # TODO: Handle alternative keys
 DEFAULT_KEY = "404142434445464748494A4B4C4D4E4F"
 
+
 class NFCHandlerThread(QThread):
     """
     Monitors the chosen reader for card presence.
     Provides methods for installing/uninstalling CAP files
     via GlobalPlatformPro. Can also list installed apps.
     """
+
     # Emitted whenever the list of readers changes
     readers_updated = pyqtSignal(list)
 
@@ -49,10 +51,9 @@ class NFCHandlerThread(QThread):
 
         # OS-specific gp command
         self.gp = {
-            "nt":   ["gp.exe", "-k", self.key],
-            "posix": ["java", "-jar", "gp.jar", "-k", self.key]
+            "nt": ["gp.exe", "-k", self.key],
+            "posix": ["java", "-jar", "gp.jar", "-k", self.key],
         }
-
 
     def run(self):
         """Main loop for detecting readers/cards. (Unchanged from your existing version.)"""
@@ -149,8 +150,8 @@ class NFCHandlerThread(QThread):
         try:
             memory = get_memory()
             if memory:
-                free = memory['persistent']['free'] / 1024
-                percent = memory['persistent']['percent_free'] * 100
+                free = memory["persistent"]["free"] / 1024
+                percent = memory["persistent"]["percent_free"] * 100
                 return f"Memory Free: {free:.0f}kB ({percent:.0f}%)"
             else:
                 return "Memory Error"
@@ -258,22 +259,27 @@ class NFCHandlerThread(QThread):
             return
 
         try:
-            cmd = [*self.gp[os.name], "--install", cap_file_path, "-r", self.selected_reader_name]
+            cmd = [
+                *self.gp[os.name],
+                "--install",
+                cap_file_path,
+                "-r",
+                self.selected_reader_name,
+            ]
             if params and "param_string" in params:
-                cmd.extend(["--params", params["param_string"]])
+                # Allow a bit more flexibility
+                # TODO: Parse for relevant switches and params
+                cmd.extend(["--params", *params["param_string"].split(" ")])
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
-                # self.status_update.emit(f"Installed: {os.path.basename(cap_file_path)}")
                 self.operation_complete.emit(True, f"Installed {cap_file_path}")
                 installed = self.get_installed_apps()
                 self.installed_apps_updated.emit(installed)
             else:
                 err_msg = f"Install failed: {result.stderr}"
-                # self.status_update.emit(err_msg)
                 self.operation_complete.emit(False, err_msg)
         except Exception as e:
             err_msg = f"Install error: {e}"
-            # self.status_update.emit(err_msg)
             self.operation_complete.emit(False, err_msg)
         finally:
             # TODO: Support caching
@@ -361,7 +367,9 @@ class NFCHandlerThread(QThread):
 
             # Attempt fallback if provided
             if fallback_aid:
-                self.status_update.emit(f"Falling back to AID-based uninstall: {fallback_aid}")
+                self.status_update.emit(
+                    f"Falling back to AID-based uninstall: {fallback_aid}"
+                )
                 self.uninstall_app(fallback_aid, force=force)
             else:
                 self.operation_complete.emit(False, err_msg)
