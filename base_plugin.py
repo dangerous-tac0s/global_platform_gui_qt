@@ -4,11 +4,13 @@ import os
 import importlib
 from abc import ABC, abstractmethod
 
+# override_map = {}
+
+
 class BaseAppletPlugin(ABC):
     """
     Abstract base for each dynamic applet plugin.
     """
-    override_map = {}
 
     @property
     @abstractmethod
@@ -53,14 +55,9 @@ class BaseAppletPlugin(ABC):
     def post_uninstall(self, **kwargs):
         pass
 
-    @classmethod
-    def auto_import_plugins(cls, package):
-        """
-        Dynamically import all .py modules from the specified directory into the given package.
-        :param directory: The directory to search for .py files.
-        :param package: The package path for dynamic imports.
-        """
-        this_dir = os.path.join(os.getcwd(), 'repos', package, os.sep)
+    def auto_import_plugins(cls, package, override_map):
+        base_dir = os.path.dirname(__file__)  # Get directory of the current file
+        this_dir = os.path.join(base_dir, 'repos', package)
         for fname in os.listdir(this_dir):
             if fname.endswith(".py") and not fname.startswith("__"):
                 mod_name = fname[:-3]  # Strip .py
@@ -70,14 +67,14 @@ class BaseAppletPlugin(ABC):
                 except Exception as e:
                     print(f"Error importing {full_mod_path}: {e}")
 
-    def set_cap_name(self, cap_name: str):
+    def set_cap_name(self, cap_name: str, override_map):
         """
         Called by main.py when user picks a .cap to install/uninstall.
         If there's a sub-file override for that .cap, we instantiate it.
         """
         self._selected_cap = cap_name
-        if cap_name in self.override_map:
-            override_cls = self.override_map[cap_name]
+        if cap_name in override_map:
+            override_cls = override_map[cap_name]
             self._override_instance = override_cls()
         else:
             self._override_instance = None

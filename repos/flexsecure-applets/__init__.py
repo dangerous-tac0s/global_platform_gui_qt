@@ -1,15 +1,12 @@
-# /repos/flexsecure_applets/__init__.py
+# /repos/flexsecure-applets/__init__.py
 
-import os
-import importlib
 import requests
 
 from base_plugin import BaseAppletPlugin
 
 """
 flexsecure-applets plugin: Manages all .cap files and their associated AIDs for the
-'DangerousThings/flexsecure-applets' GitHub repository. This plugin expects every
-applet to have an entry in the AID map.
+'DangerousThings/flexsecure-applets' GitHub repository.
 """
 
 # AID map: maps cap filenames to their corresponding AID strings.
@@ -36,7 +33,6 @@ override_map = {}
 def fetch_flexsecure_latest_release() -> dict[str, str]:
     """
     Fetch the latest release from GitHub for the 'DangerousThings/flexsecure-applets' repo.
-    Returns a dict mapping { cap_filename: download_url } for assets recognized in FLEXSECURE_AID_MAP.
     """
     url = f"https://api.github.com/repos/{OWNER}/{REPO_NAME}/releases/latest"
     resp = requests.get(url, timeout=15)
@@ -54,15 +50,12 @@ def fetch_flexsecure_latest_release() -> dict[str, str]:
 class FlexsecureAppletsPlugin(BaseAppletPlugin):
     """
     The single plugin for the entire 'flexsecure-applets' repository.
-    It uses FLEXSECURE_AID_MAP to associate CAP filenames with AIDs and delegates
-    any specialized logic (pre_install, dialog, post_install) to per-cap overrides
-    if one exists.
     """
     def __init__(self):
         super().__init__()
         self._selected_cap = None
         self._override_instance = None
-        self.auto_import_plugins('flexsecure-applets')
+        self.auto_import_plugins('flexsecure-applets', override_map)
 
     @property
     def name(self) -> str:
@@ -77,6 +70,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
         If an override is registered for this cap, instantiate it.
         """
         self._selected_cap = cap_name
+
         if cap_name in override_map:
             override_cls = override_map[cap_name]
             self._override_instance = override_cls()

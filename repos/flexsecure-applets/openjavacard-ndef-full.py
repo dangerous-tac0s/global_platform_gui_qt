@@ -1,12 +1,13 @@
-# /repos/flexsecure_applets/openjavacardndef_full.py
-
+# /repos/flexsecure-applets/openjavacard-ndef-full.py
+import ndef
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QDialog, QTabWidget, QWidget, QVBoxLayout, QFormLayout,
     QLabel, QComboBox, QCheckBox, QPushButton, QHBoxLayout, QTextEdit
 )
 from PyQt5.QtCore import Qt
+from ndef import TextRecord
 
-# Import the 'AppletOverrideBase' and the dictionary or function for registering overrides.
 from . import  override_map
 from applet_override_base import AppletOverrideBase
 
@@ -24,7 +25,7 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
     that requires a special multi-tab config UI, plus optional version checks.
     """
 
-    min_javacard_version = (3, 0, 4)  # e.g. requires JavaCard 3.0.4 or higher
+    min_javacard_version = (2, 2, 0)
 
     perm_map = {
         "open access": "00",
@@ -129,12 +130,17 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         layout = QFormLayout(self.advanced_tab)
 
         self.rw_label = QLabel()
+        font = QFont()
+        font.setPointSize(20)
+        font.setBold(True)
+        self.rw_label.setFont(font)
+        self.rw_label.setAlignment(Qt.AlignCenter)
         self.rw_label.setText(f"81 00 00")
         layout.addRow(self.rw_label)
 
         # Read permission
         self.read_perm_combo = QComboBox()
-        self.read_perm_combo.addItems(["open access", "no access", "write once", "contact only"])
+        self.read_perm_combo.addItems(["open access", "no access", "contact only"])
         self.read_perm_combo.currentIndexChanged.connect(self.on_rw_value_change)
         layout.addRow(QLabel("Read Permission:"), self.read_perm_combo)
 
@@ -173,6 +179,8 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
             #   eg, data is set, we don't *need* 82 02 -- but it can be used
             #           override the container size
 
+            record = None
+
             # Build param from Basic/Record/Advanced
             size_str = self.size_combo.currentText()  # e.g. "1kB"
             size_kb = int(size_str[:-2])
@@ -181,17 +189,29 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
                 size_in_bytes -= 1
             size_hex = f"{size_in_bytes:04X}"
 
-            # Suppose you have your old “permissions_text_to_hex” map:
             read_val = self.read_perm_combo.currentText()
             write_val = self.write_perm_combo.currentText()
             read_hex = self.perm_map.get(read_val, "00")
             write_hex = self.perm_map.get(write_val, "00")
 
+            param_string = f"8102{read_hex}{write_hex}8202{size_hex}"
+
             # Build 80 XX <data>
             record_type = self.record_type_combo.currentText()
             record_payload = self.record_payload_edit.toPlainText()
+            if record_type == 'text':
+                record = TextRecord(record_payload)
+            elif record_type == 'uri':
+                pass
+            elif record_type == 'smart poster':
+                pass
+            elif record_type == 'mime':
+                pass
 
-            param_string = f"8102{read_hex}{write_hex}8202{size_hex}"
+            if record:
+                encoded = b''.join(ndef.message_encoder([record]))
+                print(f"80{len(encoded):02X}{encoded.hex()}")
+                param_string = f'80{len(encoded):02X}{encoded.hex()}{param_string}'
 
             self._result = {
                 "param_string": param_string,
@@ -208,14 +228,10 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
 
     def post_install(self, plugin, **kwargs):
         """
-        If you need to do additional steps after the standard gp install,
-        do it here (like loading data, second gp command with param string, etc.)
+        Make the params available to NFCHandlerThread's install_app
         """
         result = getattr(self, "_result", {})
         if result and result["source"] == "ui":
             param_string = result["param_string"]
-            # Possibly run a second gp command with --params param_string
-            # e.g. plugin.call_gp_params(...)
 
-# Finally, register this override
 register_override("openjavacard-ndef-full.cap", OpenJavaCardNDEFOverride)
