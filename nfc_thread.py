@@ -1,5 +1,7 @@
 import os
 import subprocess
+import sys
+
 from PyQt5.QtCore import QThread, pyqtSignal
 from smartcard.System import readers
 from smartcard.Exceptions import NoCardException, CardConnectionException
@@ -51,8 +53,8 @@ class NFCHandlerThread(QThread):
 
         # OS-specific gp command
         self.gp = {
-            "nt": ["gp.exe", "-k", self.key],
-            "posix": ["java", "-jar", "gp.jar", "-k", self.key],
+            "nt": [resource_path("gp.exe"), "-k", self.key],
+            "posix": ["java", "-jar", resource_path("gp.jar"), "-k", self.key],
         }
 
     def run(self):
@@ -140,6 +142,7 @@ class NFCHandlerThread(QThread):
         try:
             cmd = [*self.gp[os.name], "--info", "-r", reader_name]
             result = subprocess.run(cmd, capture_output=True, text=True)
+
             return "JavaCard v3" in result.stdout
         except Exception as e:
             print(f"is_jcop3 error: {e}", flush=True)
@@ -383,3 +386,11 @@ class NFCHandlerThread(QThread):
     def stop(self):
         """Signal the loop to exit gracefully."""
         self.running = False
+
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    if hasattr(sys, "_MEIPASS"):
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
