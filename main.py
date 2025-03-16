@@ -114,11 +114,16 @@ class MessageQueue:
             self.timer.stop()
 
 
+width_height = [800, 600]
+if os.name == "nt":
+    width_height = [2 * x for x in width_height]
+
+
 class GPManagerApp(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GlobalPlatformPro App Manager")
-        self.resize(800, 600)
+        self.resize(*width_height)
         self.layout = QVBoxLayout()
 
         # Status label at the top

@@ -1,8 +1,7 @@
 # /repos/flexsecure-applets/openjavacard-ndef-full.py
 import abc
-import pprint
+import os
 import re
-from ast import Param
 
 import ndef
 from PyQt5.QtGui import QFont
@@ -14,13 +13,12 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QLabel,
     QComboBox,
-    QCheckBox,
     QPushButton,
     QHBoxLayout,
     QTextEdit,
     QStackedWidget,
-    QLineEdit,
     QFrame,
+    QLineEdit,
 )
 from PyQt5.QtCore import Qt, QLocale
 from babel import Locale
@@ -31,6 +29,10 @@ from . import override_map
 from applet_override_base import AppletOverrideBase
 
 system_locale = QLocale.system()
+
+width_height = [400, 400]
+if os.name == "nt":
+    width_height = [2 * x for x in width_height]
 
 
 def register_override(cap_name, override_cls):
@@ -75,6 +77,7 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         'plugin' is the parent plugin (FlexsecureAppletsPlugin).
         """
         dlg = QDialog(parent)
+        dlg.resize(*width_height)
 
         layout = QVBoxLayout(dlg)
 
@@ -155,28 +158,6 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         self.size_combo.currentIndexChanged.connect(self.handle_size_tab_change)
         layout.addRow(QLabel(layout.tr("Container Size:")), self.size_combo)
 
-        # Handle starting position
-        # if len(param_string) > 0 and param_string[len(param_string) - 8 :].startswith(
-        #     "8202"
-        # ):
-        # raw_bytes = bytes.fromhex(param_string[len(param_string) - 4 :])
-        # decimal_bytes = int(raw_bytes, base=16)
-        # size_kb = decimal_bytes // 1024
-        # if size_kb < 512:
-        #     self.size_combo.setCurrentIndex(0)
-        # elif size_kb < 1024 + 512:
-        #     self.size_combo.setCurrentIndex(1)
-        # elif size_kb < 1024 * 3:
-        #     self.size_combo.setCurrentIndex(2)
-        # elif size_kb < 1024 * 6:
-        #     self.size_combo.setCurrentIndex(3)
-        # elif size_kb < 1024 * 12:
-        #     self.size_combo.setCurrentIndex(4)
-        # elif size_kb < 1024 * 24:
-        #     self.size_combo.setCurrentIndex(5)
-        # else:
-        #     self.size_combo.setCurrentIndex(6)
-
     def handle_size_tab_change(self):
         param_string = self.get_param_string()
         # Used to replace the existing string
@@ -230,6 +211,7 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
 
         self.record_stacked_widget = QStackedWidget()
         self.record_stacked_widget.addWidget(TextRecordForm(self.record_stacked_widget))
+        self.record_stacked_widget.addWidget(URIRecordForm(self.record_stacked_widget))
         layout.addRow(self.record_stacked_widget)
 
     def change_record_type(self, index):
@@ -246,7 +228,7 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         font.setBold(True)
         self.rw_label.setFont(font)
         self.rw_label.setAlignment(Qt.AlignCenter)
-        self.rw_label.setText(f"81 00 00")
+        self.rw_label.setText(f"81 02 00 00")
         layout.addRow(self.rw_label)
 
         layout.addRow(horizontal_rule())
@@ -375,18 +357,20 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
                 # No record. We'll add it to the beginning.
                 self.set_param_string(record_tab_param + param_string)
 
+        # Size
         # Evaluate param string to push updates from raw edits
         size_combo_current = self.size_combo.currentIndex()
-        size_combo_bytes = self.size_combo.currentText()[:-2] * 1024
+        size_combo_bytes = int(self.size_combo.currentText()[:-2]) * 1024
         size_param = param_string[-4:] if param_string[-8:].startswith("8202") else None
 
         if size_param:
-            pass
+            size_param_bytes = int(size_param, base=16)
+
+            if size_param_bytes != size_combo_bytes:
+                self.size_combo.setCurrentIndex(bytes_to_index(size_param_bytes))
         else:
             # Clear our 82 02 bytes
-            size_param = param_string[-8:]
-        if int(self.size_combo.currentText()[:-2]) * 1024:
-            pass
+            self.size_combo.setCurrentIndex(0)
 
     def on_ok(self, dlg):
         """
@@ -536,6 +520,67 @@ class TextRecordForm(AbstractRecordForm):
                 values.get("language", values["language"] or 0)
             )
             self.payload_edit.setText(values.get("payload", values["payload"] or ""))
+
+
+class URIRecordForm(AbstractRecordForm):
+    def buildForm(self):
+
+        self.uri_prefix_combo = QComboBox()
+        self.uri_prefix_combo.addItems((NFC_URI_PREFIXES.keys()))
+        # self.language_combo.setCurrentIndex(lang_index)
+
+        self.form_layout.addRow(QLabel(self.tr("Prefix:")), self.uri_prefix_combo)
+
+        self.uri_payload_edit = QLineEdit()
+        self.form_layout.addRow(QLabel(self.tr("Payload:")), self.uri_payload_edit)
+
+        # self.language_combo.currentIndexChanged.connect(self.handleUpdate)
+        # text_record_focus_filter = FocusFilter(self.handleUpdate)
+        # # Handle updating param_strig on focus out
+        # self.uri_payload_edit.installEventFilter(text_record_focus_filter)
+
+    def handleUpdate(self):
+        # param_string = self.parent().parent()
+        if len(self.uri_payload_edit.toPlainText()) > 0:
+            # We've got a payload
+            record = ndef.UriRecord(
+                self.uri_payload_edit.toPlainText(),
+            )
+            encoded = b"".join(ndef.message_encoder([record]))
+            byte_length = len(encoded)
+            param = f"80{byte_length:02X}{encoded.hex()}"
+        else:
+            # No payload. We need to clear the param_string if necessary.
+            pass
+
+    def getValues(self):
+        record = TextRecord(
+            self.uri_payload_edit.toPlainText(),
+        )
+        encoded = b"".join(ndef.message_encoder([record]))
+        encoded_length = f"{len(encoded):02X}"
+        return {
+            "payload": self.uri_payload_edit.toPlainText(),
+            "params": f"80{encoded_length}{encoded.hex()}",
+        }
+
+    def setValues(self, param_str: str or None):
+        lang = system_locale.name().split("_")[0]
+        lang_index = ISO_639_1_LANGS.index(lang)
+
+        if not param_str:
+            # self.language_combo.setCurrentIndex(lang_index)
+            self.uri_payload_edit.setText("")
+        else:
+            values = get_record_from_param_string(param_str)
+            print(values)
+
+            # self.language_combo.setCurrentIndex(
+            #     values.get("language", values["language"] or 0)
+            # )
+            self.uri_payload_edit.setText(
+                values.get("payload", values["payload"] or "")
+            )
 
 
 ##########################################################################
@@ -849,6 +894,29 @@ def get_permissions_from_param_string(
         return {"param": param, "read": param[4:6], "write": param[-2:]}
 
     return None
+
+
+def bytes_to_index(decimal_bytes: int) -> int:
+    """
+    Finds the closest selection to the input bytes
+    for the size combo box
+    :param decimal_bytes:
+    :return:
+    """
+    if decimal_bytes < 512:
+        return 0
+    elif decimal_bytes < 1024 + 512:
+        return 1
+    elif decimal_bytes < 1024 * 3:
+        return 2
+    elif decimal_bytes < 1024 * 6:
+        return 3
+    elif decimal_bytes < 1024 * 12:
+        return 4
+    elif decimal_bytes < 1024 * 24:
+        return 5
+    else:
+        return 6
 
 
 ##########################################################################
