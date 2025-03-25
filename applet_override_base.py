@@ -3,6 +3,8 @@ class AppletOverrideBase:
     A base class for any per-app overrides. Each sub-file can define
     a subclass with specialized logic if it wants to override
     the default approach.
+
+    TODO: This needs to be audited
     """
 
     def pre_install(self, plugin, **kwargs):

@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('gp.exe', '.'), ('gp.jar', '.'), ('repos', 'repos')],
+    datas=[('gp.exe', '.'), ('gp.jar', '.'), ('repos', 'repos'), ('favicon.ico', '.')],
     hiddenimports=['ndef', 'babel', 'main', 'applet_override_base'],
     hookspath=[],
     hooksconfig={},

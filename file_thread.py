@@ -80,7 +80,7 @@ class FileHandlerThread(QThread):
                 try:
                     os.remove(file_path)
                 except:
-                    pass  # best-effort cleanup
+                    pass
 
             error_msg = f"Download Error: {e}"
             print(error_msg)

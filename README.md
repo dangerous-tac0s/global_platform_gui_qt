@@ -12,21 +12,32 @@ Rebooted from Tkinter to PyQt. Still early.
 
 Features:
 - Decodes AIDs to names of flexSecure apps
+- Reports available memory (if app is installed)
 - Installs the latest version of an app
 - Can uninstall apps
-- Will probably break at random
 - Supports NDEF Installation
   - Container Size
   - Permissions
-  - Initial Record (Text only atm)
-
-Want a feature? Feel free to submit a PR.
+  - Initial Record (Text and URI atm)
+    - Not much in the way of validation/cleaning
+- 'Plugins' can be made to support other resources and advanced (read: requires params) installs
+- Will probably break at random
 
 <img src="screenshot.png" width=350/>
 
 ## Known Issues
 - Reader selection hasn't been tested
 - Sometimes throws an error if a card is present on app start
+- No real validation URI record creation
+
+## Forthcoming
+- Non-standard key handling
+- Better NDEF support
+  - Support encrypted records like @hoker's Apex Manager?
+  - Support writing of NDEF records to NTAGs, DESFire, etc?
+- Version reporting
+- cap file caching
+- 'Plugins' that don't require rebuilding if you're using a binary
 
 ## Quick Start
 

@@ -4,7 +4,7 @@ import os
 import tempfile
 import importlib
 
-from PyQt5.QtGui import QFontMetrics
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -18,12 +18,11 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QMessageBox,
     QFrame,
-    QPlainTextEdit,
 )
-from PyQt5.QtCore import Qt, QTimer, QSize, QObject, QEvent
+from PyQt5.QtCore import  QTimer
 
 from file_thread import FileHandlerThread
-from nfc_thread import NFCHandlerThread
+from nfc_thread import NFCHandlerThread, resource_path
 
 #
 # Folder for caching .cap downloads
@@ -123,6 +122,8 @@ class GPManagerApp(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GlobalPlatformPro App Manager")
+        self.setWindowIcon(QIcon(resource_path('favicon.ico')))
+
         self.resize(*width_height)
         self.layout = QVBoxLayout()
 
@@ -365,7 +366,7 @@ class GPManagerApp(QWidget):
                 self.current_plugin = plugin
                 self.fetch_file(cap_name, self.on_install_download_complete)
         else:
-            # No plugin found => unexpected in this design, but we handle gracefully
+            # No plugin found => but we handle gracefully
             self.current_plugin = None
             self.fetch_file(cap_name, self.on_install_download_complete)
 
@@ -461,14 +462,12 @@ class GPManagerApp(QWidget):
 
         for raw_aid in installed_aids.keys():
             # e.g. 'A000000308000010000100'
-            # You might want version = installed_aids[raw_aid] if you need it
-            version = installed_aids[raw_aid]
+            version = installed_aids[raw_aid] # TODO: rendering versions
 
             norm = raw_aid.replace(" ", "").upper()
             matched_plugin_name = None
             matched_cap = None
 
-            # The rest of your logic, same as before
             for pname, plugin_cls in self.plugin_map.items():
                 tmp = plugin_cls()
                 if hasattr(tmp, "get_cap_for_aid"):
@@ -518,21 +517,9 @@ def horizontal_rule():
     return h_line
 
 
-class FocusFilter(QObject):
-    def __init__(self, callback):
-        super().__init__()
-        self.callback = callback
-
-    def eventFilter(self, obj, event):
-        print("event filter")
-        print(event.type())
-        if event.type() == QEvent.FocusOut:
-            self.callback()
-        return super().eventFilter(obj, event)
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(resource_path("favicon.ico")))
     window = GPManagerApp()
     window.show()
     sys.exit(app.exec_())

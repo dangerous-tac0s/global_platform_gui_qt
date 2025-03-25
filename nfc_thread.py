@@ -152,12 +152,12 @@ class NFCHandlerThread(QThread):
         """Call measure.get_memory()."""
         try:
             memory = get_memory()
-            if memory:
+            if memory and memory != -1:
                 free = memory["persistent"]["free"] / 1024
                 percent = memory["persistent"]["percent_free"] * 100
                 return f"Memory Free: {free:.0f}kB ({percent:.0f}%)"
-            else:
-                return "Memory Error"
+            elif memory == -1:
+                    return "Javacard Memory not installed"
         except Exception as e:
             return f"Memory Error: {e}"
 
@@ -257,7 +257,6 @@ class NFCHandlerThread(QThread):
     # ----------------------------
     def install_app(self, cap_file_path, params=None):
         if not self.selected_reader_name:
-            # self.status_update.emit("No reader selected for install.")
             self.operation_complete.emit(False, "No reader selected.")
             return
 
@@ -271,7 +270,6 @@ class NFCHandlerThread(QThread):
             ]
             if params and "param_string" in params:
                 # Allow a bit more flexibility
-                # TODO: Parse for relevant switches and params
                 cmd.extend(["--params", *params["param_string"].split(" ")])
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
@@ -297,7 +295,6 @@ class NFCHandlerThread(QThread):
            gp --uninstall [--force?] <aid> -r <reader>
         """
         if not self.selected_reader_name:
-            # self.status_update.emit("No reader selected for uninstall.")
             self.operation_complete.emit(False, "No reader selected.")
             return
 
@@ -309,18 +306,15 @@ class NFCHandlerThread(QThread):
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
-                # self.status_update.emit(f"Uninstalled AID: {aid}")
                 self.operation_complete.emit(True, f"Uninstalled {aid}")
                 installed = self.get_installed_apps()
                 self.installed_apps_updated.emit(installed)
             else:
                 err_msg = f"Uninstall by AID failed: {result.stderr}"
-                # self.status_update.emit(err_msg)
                 self.operation_complete.emit(False, err_msg)
 
         except Exception as e:
             err_msg = f"Uninstall error (AID): {e}"
-            # self.status_update.emit(err_msg)
             self.operation_complete.emit(False, err_msg)
         finally:
             mem = self.get_memory_status()
@@ -333,7 +327,6 @@ class NFCHandlerThread(QThread):
         The 'force' param, if True, passes '-f' to gp (applies to both attempts).
         """
         if not self.selected_reader_name:
-            # self.status_update.emit("No reader selected for uninstall.")
             self.operation_complete.emit(False, "No reader selected.")
             return
 
@@ -347,7 +340,6 @@ class NFCHandlerThread(QThread):
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 # success
-                # self.status_update.emit(f"Uninstalled CAP file: {os.path.basename(cap_file_path)}")
                 self.operation_complete.emit(True, f"Uninstalled {cap_file_path}")
                 installed = self.get_installed_apps()
                 self.installed_apps_updated.emit(installed)
@@ -386,6 +378,7 @@ class NFCHandlerThread(QThread):
     def stop(self):
         """Signal the loop to exit gracefully."""
         self.running = False
+
 
 
 def resource_path(relative_path):

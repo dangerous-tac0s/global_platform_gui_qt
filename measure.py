@@ -64,5 +64,12 @@ def get_memory(reader=0):
                 },
             }
         else:
-            print("error: Card response: " + f"{sw1:02x}" + " " + f"{sw2:02x}")
+            sw1 = f"{sw1:02x}"
+            sw2 = f"{sw2:02x}"
+            print("error: Card response: " + f"{sw1}" + " " + f"{sw2}")
+
+            if sw1 == "6a" and sw2 == "82":
+                # App not installed
+                return -1
+
         connection.disconnect()

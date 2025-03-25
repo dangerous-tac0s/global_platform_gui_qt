@@ -22,9 +22,9 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QLocale
 from babel import Locale
-from ndef import TextRecord
+from ndef import TextRecord, UriRecord
 
-from main import horizontal_rule, FocusFilter
+from main import horizontal_rule
 from . import override_map
 from applet_override_base import AppletOverrideBase
 
@@ -50,24 +50,21 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
     """
 
     min_javacard_version = (2, 2, 0)
+    prev_tab = None
 
     def pre_install(self, plugin, **kwargs):
         """
         We'll check if the card's OS version is >= min_javacard_version
-        (Optional logic - depends on how you store the card version).
         """
         nfc_thread = kwargs.get("nfc_thread")
         if not nfc_thread:
-            return  # or raise an error if we must have it
+            return
 
-        # Example approach - skip if we don't parse version
-        card_ver = getattr(nfc_thread, "card_os_version", None)
-        if card_ver is None:
-            # If there's a method like nfc_thread.get_javacard_version(...), call it
-            # or skip if you haven't implemented that
-            pass
-
-        # If we wanted to do a compare:
+        # TODO: JCOP version handling
+        # card_ver = getattr(nfc_thread, "card_os_version", None)
+        # if card_ver is None:
+        #     pass
+        #
         # if card_ver < self.min_javacard_version:
         #     raise Exception(f"Requires JavaCard {self.min_javacard_version}, but card is {card_ver}.")
 
@@ -190,8 +187,6 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
             if param_string[-8:].startswith("8202"):
                 self.set_param_string(param_string[0:-8])
 
-        print(self.get_param_string())
-
     def build_record_tab(self):
         from PyQt5.QtWidgets import QFormLayout, QLabel, QComboBox, QTextEdit
 
@@ -202,8 +197,10 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
             [
                 layout.tr("text"),
                 layout.tr("uri"),
-                layout.tr("mime"),
-                layout.tr("smart poster"),
+                # TODO: More record types
+                # TODO: Support multiple records
+                # layout.tr("mime"),
+                # layout.tr("smart poster"),
             ]
         )
         self.record_type_combo.currentIndexChanged.connect(self.change_record_type)
@@ -302,8 +299,6 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
                     print("WTF mate? Probably an indexing issue")
                     print(param_string[num_bytes * 2], "\n", param_string)
 
-        print(self.get_param_string())
-
     def build_raw_tab(self):
         from PyQt5.QtWidgets import QFormLayout, QLabel, QTextEdit
 
@@ -311,7 +306,6 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         layout = QFormLayout(self.raw_tab)
 
         self.raw_text_edit = QTextEdit()
-        # self.raw_text_edit.setPlaceholderText("Enter hex param string (optional)")
         if param_string != "":
             self.raw_text_edit.setText(param_string)
         layout.addRow(
@@ -321,23 +315,13 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
 
     def on_tab_change(self, tab):
         """
-        This handles:
-            - the record tab's setting of param_string
-            - the raw tab
-                - input validation
-                - setting param_string
-
+        This handles updating the param_string value and
+        passing those updates to the raw tab.
         """
         param_string = self.get_param_string()
 
-        # Raw Tab is last
-        if tab == self.tab_widget.count() - 1:
-            # If we are going to the raw tab, update it.
-            if self.raw_text_edit.toPlainText() != param_string:
-                self.raw_text_edit.setText(param_string)
-
-        else:
-            # raw to record
+        if self.prev_tab == 1:  # TODO: maybe make a map to make this less static?
+            # We were just at "data"--let's make sure our param string is correct.
             record_parsed = get_record_from_param_string(param_string)
             record_tab = self.record_stacked_widget.currentWidget()
             record_tab_values = record_tab.getValues()
@@ -356,28 +340,35 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
             else:
                 # No record. We'll add it to the beginning.
                 self.set_param_string(record_tab_param + param_string)
+        elif self.prev_tab == 0:
+            # Size
+            # Evaluate param string to push updates from raw edits
+            size_combo_current = self.size_combo.currentIndex()
+            size_combo_bytes = int(self.size_combo.currentText()[:-2]) * 1024
+            size_param = param_string[-4:] if param_string[-8:].startswith("8202") else None
 
-        # Size
-        # Evaluate param string to push updates from raw edits
-        size_combo_current = self.size_combo.currentIndex()
-        size_combo_bytes = int(self.size_combo.currentText()[:-2]) * 1024
-        size_param = param_string[-4:] if param_string[-8:].startswith("8202") else None
+            if size_param:
+                size_param_bytes = int(size_param, base=16)
 
-        if size_param:
-            size_param_bytes = int(size_param, base=16)
+                if size_param_bytes != size_combo_bytes:
+                    self.size_combo.setCurrentIndex(bytes_to_index(size_param_bytes))
+            else:
+                # Clear our 82 02 bytes
+                self.size_combo.setCurrentIndex(0)
 
-            if size_param_bytes != size_combo_bytes:
-                self.size_combo.setCurrentIndex(bytes_to_index(size_param_bytes))
-        else:
-            # Clear our 82 02 bytes
-            self.size_combo.setCurrentIndex(0)
+        # Raw Tab is last
+        if tab == self.tab_widget.count() - 1:
+            # If we are going to the raw tab, update it.
+            if self.raw_text_edit.toPlainText() != param_string:
+                self.raw_text_edit.setText(param_string)
+
+        self.prev_tab = tab
 
     def on_ok(self, dlg):
         """
-        Gracefully exit. Kinda legacy.
+        Gracefully exit.
         """
-
-        print(self.record_stacked_widget.currentWidget().getValues())
+        self.on_tab_change(self.prev_tab) # Handle any pending param_string updates
 
         dlg.accept()
 
@@ -460,7 +451,6 @@ class AbstractRecordForm(QWidget):
 
 class TextRecordForm(AbstractRecordForm):
     def buildForm(self):
-
         self.language_combo = QComboBox()
         self.language_combo.addItems((iso_to_localized_names.values()))
         lang = system_locale.name().split("_")[0]
@@ -473,12 +463,8 @@ class TextRecordForm(AbstractRecordForm):
         self.form_layout.addRow(self.payload_edit)
 
         self.language_combo.currentIndexChanged.connect(self.handleUpdate)
-        text_record_focus_filter = FocusFilter(self.handleUpdate)
-        # Handle updating param_strig on focus out
-        self.payload_edit.installEventFilter(text_record_focus_filter)
 
     def handleUpdate(self):
-        # param_string = self.parent().parent()
         if len(self.payload_edit.toPlainText()) > 0:
             # We've got a payload
             record = ndef.TextRecord(
@@ -514,7 +500,6 @@ class TextRecordForm(AbstractRecordForm):
             self.payload_edit.setText("")
         else:
             values = get_record_from_param_string(param_str)
-            print(values)
 
             self.language_combo.setCurrentIndex(
                 values.get("language", values["language"] or 0)
@@ -524,60 +509,43 @@ class TextRecordForm(AbstractRecordForm):
 
 class URIRecordForm(AbstractRecordForm):
     def buildForm(self):
-
-        self.uri_prefix_combo = QComboBox()
-        self.uri_prefix_combo.addItems((NFC_URI_PREFIXES.keys()))
-        # self.language_combo.setCurrentIndex(lang_index)
-
-        self.form_layout.addRow(QLabel(self.tr("Prefix:")), self.uri_prefix_combo)
-
         self.uri_payload_edit = QLineEdit()
-        self.form_layout.addRow(QLabel(self.tr("Payload:")), self.uri_payload_edit)
-
-        # self.language_combo.currentIndexChanged.connect(self.handleUpdate)
-        # text_record_focus_filter = FocusFilter(self.handleUpdate)
-        # # Handle updating param_strig on focus out
-        # self.uri_payload_edit.installEventFilter(text_record_focus_filter)
+        self.form_layout.addRow(QLabel(self.tr("URI:")), self.uri_payload_edit)
 
     def handleUpdate(self):
-        # param_string = self.parent().parent()
-        if len(self.uri_payload_edit.toPlainText()) > 0:
+        """
+        TODO: Cleanup. This is legacy, IIRC
+        """
+        if len(self.uri_payload_edit.text()) > 0:
             # We've got a payload
             record = ndef.UriRecord(
-                self.uri_payload_edit.toPlainText(),
+                self.uri_payload_edit.text(),
             )
             encoded = b"".join(ndef.message_encoder([record]))
             byte_length = len(encoded)
             param = f"80{byte_length:02X}{encoded.hex()}"
+            print(f"Param: {param}")
         else:
             # No payload. We need to clear the param_string if necessary.
             pass
 
     def getValues(self):
-        record = TextRecord(
-            self.uri_payload_edit.toPlainText(),
+        record = UriRecord(
+            self.uri_payload_edit.text(),
         )
         encoded = b"".join(ndef.message_encoder([record]))
         encoded_length = f"{len(encoded):02X}"
         return {
-            "payload": self.uri_payload_edit.toPlainText(),
+            "payload": self.uri_payload_edit.text(),
             "params": f"80{encoded_length}{encoded.hex()}",
         }
 
     def setValues(self, param_str: str or None):
-        lang = system_locale.name().split("_")[0]
-        lang_index = ISO_639_1_LANGS.index(lang)
-
         if not param_str:
-            # self.language_combo.setCurrentIndex(lang_index)
             self.uri_payload_edit.setText("")
         else:
             values = get_record_from_param_string(param_str)
-            print(values)
 
-            # self.language_combo.setCurrentIndex(
-            #     values.get("language", values["language"] or 0)
-            # )
             self.uri_payload_edit.setText(
                 values.get("payload", values["payload"] or "")
             )
@@ -850,17 +818,12 @@ def get_record_from_param_string(param_string: str) -> dict[str, str or int] or 
 
     if not length_match:
         return None
-    print(length_match.groups())
 
     length = int(length_match.groups()[0], base=16)
-    print(f"record length {length}")
-    print(rf"^80{length_match.groups()[0]}{RE_BYTE*length}")
-    print(param_string)
     record = re.search(rf"^80{length_match.groups()[0]}{RE_BYTE*length}", param_string)
-    print(record)
+
     if not record:
         return None
-    print(record[0])
 
     data = record[0][4:]
 
