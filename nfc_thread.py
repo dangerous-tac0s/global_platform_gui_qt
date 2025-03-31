@@ -1,7 +1,10 @@
 import os
+import re
 import subprocess
 import sys
+import zipfile
 
+import chardet
 from PyQt5.QtCore import QThread, pyqtSignal
 from smartcard.System import readers
 from smartcard.Exceptions import NoCardException, CardConnectionException
@@ -292,7 +295,7 @@ class NFCHandlerThread(QThread):
                 # self.operation_complete.emit(False, err_msg)
                 self.error_signal.emit(err_msg)
                 # Let's try to remove the app now
-                self.uninstall_app()
+                self.uninstall_app_by_cap(cap_file_path)
         except Exception as e:
             err_msg = f"Install error: {e}"
             # self.operation_complete.emit(False, err_msg)
@@ -315,9 +318,9 @@ class NFCHandlerThread(QThread):
 
         try:
             cmd = [*self.gp[os.name], "--uninstall"]
-            if force:
-                cmd.append("-f")  # or '--force' if gp.jar uses that
             cmd.extend([aid, "-r", self.selected_reader_name])
+            if force:
+                cmd.extend("-f")  # or '--force' if gp.jar uses that
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
@@ -325,9 +328,10 @@ class NFCHandlerThread(QThread):
                 installed = self.get_installed_apps()
                 self.installed_apps_updated.emit(installed)
             else:
-                err_msg = f"Uninstall by AID failed: {result.stderr}"
-                self.operation_complete.emit(False, err_msg)
-                self.error_signal.emit(err_msg)
+                pass
+                # err_msg = f"Uninstall by AID failed: {result.stderr}"
+                # self.operation_complete.emit(False, "")
+                # self.error_signal.emit(err_msg)
 
         except Exception as e:
             err_msg = f"Uninstall error (AID): {e}"
@@ -362,13 +366,17 @@ class NFCHandlerThread(QThread):
                 self.installed_apps_updated.emit(installed)
             else:
                 # Fail => fallback to AID if provided
-                err_msg = f"Uninstall by CAP file failed: {result.stderr}"
-                self.status_update.emit(err_msg)
+                # err_msg = f"Uninstall by CAP file failed: {result.stderr}"
+                # self.status_update.emit(err_msg)
+
+                manifest = extract_manifest_from_cap(cap_file_path)
+
+                fallback_aid = get_selected_manifest(manifest)["aid"]
 
                 if fallback_aid:
-                    self.status_update.emit(
-                        f"Falling back to AID-based uninstall: {fallback_aid}"
-                    )
+                    # self.status_update.emit(
+                    #     f"Falling back to AID-based uninstall: {fallback_aid}"
+                    # )
                     self.uninstall_app(fallback_aid, force=force)
                 else:
                     self.operation_complete.emit(False, err_msg)
@@ -404,3 +412,135 @@ def resource_path(relative_path):
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
+
+
+def detect_encoding(file_path):
+    """
+    Detect the file encoding using chardet.
+
+    Args:
+        file_path (str): Path to the file.
+
+    Returns:
+        str: Detected encoding.
+    """
+    with open(file_path, "rb") as f:
+        raw_data = f.read()
+        result = chardet.detect(raw_data)
+        return result["encoding"]
+
+
+def extract_manifest_from_cap(cap_file_path, output_dir=None):
+    """
+    Extract the MANIFEST.MF file from a CAP archive and return a dictionary with all parsed data.
+
+    Args:
+        cap_file_path (str): Path to the CAP archive (ZIP file).
+        output_dir (str, optional): Directory where the MANIFEST.MF will be saved. Defaults to None.
+
+    Returns:
+        dict: A dictionary containing all keys and values parsed from the MANIFEST.MF file.
+    """
+    try:
+        with zipfile.ZipFile(cap_file_path, "r") as zip_ref:
+            # List files in the archive to find 'META-INF/MANIFEST.MF'
+            file_list = zip_ref.namelist()
+
+            manifest_file = "META-INF/MANIFEST.MF"
+            if manifest_file not in file_list:
+                print(f"Error: {manifest_file} not found in the CAP archive.")
+                return None
+
+            # Extract the MANIFEST.MF content
+            with zip_ref.open(manifest_file) as mf_file:
+                # Temporarily write to a file to detect encoding
+                temp_path = "temp_manifest.MF"
+                with open(temp_path, "wb") as temp_file:
+                    temp_file.write(mf_file.read())
+
+                # Detect encoding of the MANIFEST.MF file
+                encoding = detect_encoding(temp_path)
+
+                # Read the content using the detected encoding
+                with open(temp_path, "r", encoding=encoding) as temp_file:
+                    manifest_content = temp_file.read()
+
+                if output_dir:
+                    # Optionally save the manifest to a file
+                    output_file_path = os.path.join(output_dir, "MANIFEST.MF")
+                    with open(output_file_path, "w") as output_file:
+                        output_file.write(manifest_content)
+                    print(f"MANIFEST.MF extracted to {output_file_path}")
+
+                # Debug: Print manifest content to inspect structure
+                # print("Manifest Content:\n", manifest_content)
+
+                # Parse the manifest and extract all relevant fields
+                return parse_manifest(manifest_content)
+
+    except zipfile.BadZipFile:
+        print(f"Error: The file {cap_file_path} is not a valid ZIP archive.")
+        return None
+    except Exception as e:
+        print(cap_file_path)
+        print(f"An error occurred while extracting the MANIFEST.MF: {e}")
+        print(manifest_content)
+        print()
+        return None
+    finally:
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+
+
+def parse_manifest(manifest_content: str) -> dict:
+    """
+    Parse the manifest content to extract all fields.
+
+    Args:
+        manifest_content (str): The contents of the extracted MANIFEST.MF file.
+
+    Returns:
+        dict: A dictionary containing all keys and values parsed from the manifest.
+    """
+    data = {}
+
+    # Use a regular expression to find all key-value pairs in the manifest
+    pattern = r"(?P<key>^[A-Za-z0-9\-]+):\s*(?P<value>.*)"
+    matches = re.finditer(pattern, manifest_content, re.MULTILINE)
+
+    for match in matches:
+        key = match.group("key").strip()
+        value = match.group("value").strip()
+
+        # Parse AID fields (e.g., Java-Card-Applet-1-AID)
+        if key == "Java-Card-Applet-AID":
+            value = value.replace(":", "")
+
+        # Fallback. VivoKey's OTP app has a mal-formed AID in 'Java-Card-Applet-AID'
+        if key == "Classic-Package-AID":
+            value = value.replace("aid", "").replace("/", "")
+
+        # Parse version fields (e.g., Runtime-Descriptor-Version)
+        elif key == "Java-Card-Package-Version" or key == "Runtime-Descriptor-Version":
+            # Convert version to a tuple of integers
+            value = value
+
+            if key == "Runtime-Descriptor-Version" and len(value) < 3:
+                while len(value) < 3:
+                    value = tuple([*value, 0])
+
+        data[key] = value
+
+    return data
+
+
+def get_selected_manifest(manifest_dict):
+    return {
+        "name": manifest_dict.get("Name", None),
+        "aid": manifest_dict.get("Java-Card-Applet-AID", None)
+        or manifest_dict.get("Classic-Package-AID", None),
+        "app_version": manifest_dict.get("Java-Card-Package-Version", None),
+        "jcop_version": manifest_dict.get("Runtime-Descriptor-Version", None),
+    }

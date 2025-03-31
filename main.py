@@ -191,7 +191,6 @@ class GPManagerApp(QWidget):
             plugin_instance = plugin_cls()
             caps = plugin_instance.fetch_available_caps()  # e.g. {cap_name: url}
             for cap_n, url in caps.items():
-                # If there's a conflict, you can decide whether to overwrite or skip
                 self.available_apps_info[cap_n] = (plugin_name, url)
 
         #
@@ -519,7 +518,7 @@ class GPManagerApp(QWidget):
         QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
 
     def update_title_bar(self, message: str):
-        if message and len(message) > 0:
+        if not "None" in message and len(message) > 0:
             self.setWindowTitle(f"{message}")
         else:
             self.setWindowTitle(APP_TITLE)
