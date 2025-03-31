@@ -25,6 +25,8 @@ Features:
 
 <img src="screenshot.png" width=350/>
 
+<img src="screenshot_ndef.png" width=350/>
+
 ## Known Issues
 - Reader selection hasn't been tested
 - Sometimes throws an error if a card is present on app start

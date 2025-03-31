@@ -387,13 +387,13 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         """Replaces the entire param_string"""
         self._result["param_string"] = str(param_string)
 
-    def post_install(self, plugin, **kwargs):
-        """
-        Make the params available to NFCHandlerThread's install_app
-        """
-        result = getattr(self, "_result", {})
-        if result and result["source"] == "ui":
-            param_string = result["param_string"]
+    # def post_install(self, plugin, **kwargs):
+    #     """
+    #     Make the params available to NFCHandlerThread's install_app
+    #     """
+    #     result = getattr(self, "_result", {})
+    #     if result and result["source"] == "ui":
+    #         param_string = result["param_string"]
 
 
 ##########################################################################
