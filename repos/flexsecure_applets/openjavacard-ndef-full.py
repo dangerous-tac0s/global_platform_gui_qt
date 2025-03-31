@@ -1,4 +1,4 @@
-# /repos/flexsecure-applets/openjavacard-ndef-full.py
+# /repos/flexsecure_applets/openjavacard-ndef-full.py
 import abc
 import os
 import re
@@ -345,7 +345,9 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
             # Evaluate param string to push updates from raw edits
             size_combo_current = self.size_combo.currentIndex()
             size_combo_bytes = int(self.size_combo.currentText()[:-2]) * 1024
-            size_param = param_string[-4:] if param_string[-8:].startswith("8202") else None
+            size_param = (
+                param_string[-4:] if param_string[-8:].startswith("8202") else None
+            )
 
             if size_param:
                 size_param_bytes = int(size_param, base=16)
@@ -368,7 +370,7 @@ class OpenJavaCardNDEFOverride(AppletOverrideBase):
         """
         Gracefully exit.
         """
-        self.on_tab_change(self.prev_tab) # Handle any pending param_string updates
+        self.on_tab_change(self.prev_tab)  # Handle any pending param_string updates
 
         dlg.accept()
 

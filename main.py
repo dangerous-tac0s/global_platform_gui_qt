@@ -19,10 +19,12 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QFrame,
 )
-from PyQt5.QtCore import  QTimer
+from PyQt5.QtCore import QTimer
 
 from file_thread import FileHandlerThread
 from nfc_thread import NFCHandlerThread, resource_path
+
+APP_TITLE = "GlobalPlatformPro App Manager"
 
 #
 # Folder for caching .cap downloads
@@ -52,7 +54,7 @@ def load_plugins():
     that define a class subclassing BaseAppletPlugin.
 
     Returns a dict plugin_map: { plugin_name: plugin_class }.
-    E.g. { "flexsecure-applets": <class FlexsecureAppletsPlugin>, ... }
+    E.g. { "flexsecure_applets": <class FlexsecureAppletsPlugin>, ... }
     """
     plugin_map = {}
     repos_dir = os.path.join(os.path.dirname(__file__), "repos")
@@ -121,8 +123,8 @@ if os.name == "nt":
 class GPManagerApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GlobalPlatformPro App Manager")
-        self.setWindowIcon(QIcon(resource_path('favicon.ico')))
+        self.setWindowTitle(APP_TITLE)
+        self.setWindowIcon(QIcon(resource_path("favicon.ico")))
 
         self.resize(*width_height)
         self.layout = QVBoxLayout()
@@ -207,6 +209,8 @@ class GPManagerApp(QWidget):
         self.nfc_thread.status_update.connect(self.process_nfc_status)
         self.nfc_thread.operation_complete.connect(self.on_operation_complete)
         self.nfc_thread.installed_apps_updated.connect(self.on_installed_apps_updated)
+        self.nfc_thread.error_signal.connect(self.show_error_dialog)
+        self.nfc_thread.title_bar.connect(self.update_title_bar)
         self.nfc_thread.start()
 
         # Initially disable install/uninstall
@@ -321,7 +325,8 @@ class GPManagerApp(QWidget):
         self.download_bar.setValue(0)
         self.install_button.setEnabled(True)
         self.uninstall_button.setEnabled(True)
-        self.message_queue.add_message(err_msg)
+        self.show_error_dialog(err_msg)
+        # self.message_queue.add_message(err_msg)
 
     #
     #  Install Flow
@@ -412,7 +417,8 @@ class GPManagerApp(QWidget):
             # Fetch (or use cached) the .cap file before uninstalling.
             self.fetch_file(cap_name, self.on_uninstall_download_complete)
         else:
-            self.message_queue.add_message(f"No plugin found for {cap_name}")
+            self.show_error_dialog(f"No plugin found for {cap_name}")
+            # self.message_queue.add_message(f"No plugin found for {cap_name}")
 
     def on_uninstall_download_complete(self, file_path, params=None):
         self.download_bar.hide()
@@ -445,7 +451,8 @@ class GPManagerApp(QWidget):
             try:
                 self.current_plugin.post_install()
             except Exception as e:
-                self.message_queue.add_message(f"Post-install error: {e}")
+                self.show_error_dialog(f"Post-install: {e}")
+                # self.message_queue.add_message(f"Post-install error: {e}")
 
         self.current_plugin = None
 
@@ -462,7 +469,7 @@ class GPManagerApp(QWidget):
 
         for raw_aid in installed_aids.keys():
             # e.g. 'A000000308000010000100'
-            version = installed_aids[raw_aid] # TODO: rendering versions
+            version = installed_aids[raw_aid]  # TODO: rendering versions
 
             norm = raw_aid.replace(" ", "").upper()
             matched_plugin_name = None
@@ -507,6 +514,15 @@ class GPManagerApp(QWidget):
         self.nfc_thread.stop()
         self.nfc_thread.wait()
         event.accept()
+
+    def show_error_dialog(self, message: str):
+        QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
+
+    def update_title_bar(self, message: str):
+        if message and len(message) > 0:
+            self.setWindowTitle(f"{message}")
+        else:
+            self.setWindowTitle(APP_TITLE)
 
 
 def horizontal_rule():

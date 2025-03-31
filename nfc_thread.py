@@ -35,6 +35,12 @@ class NFCHandlerThread(QThread):
     # Emitted with the updated list of AIDs after a successful install/uninstall
     installed_apps_updated = pyqtSignal(dict)
 
+    # Emitted upon any errors. Pipes it to a dialog.
+    error_signal = pyqtSignal(str)
+
+    # Emitted whenever we have a good card scanned.
+    title_bar = pyqtSignal(str)
+
     def __init__(self, selected_reader_name=None, parent=None):
         """
         :param selected_reader_name: The currently chosen reader (or None at start).
@@ -94,7 +100,7 @@ class NFCHandlerThread(QThread):
                             self.card_present.emit(True)
                             if jcop3:
                                 mem = self.get_memory_status()
-                                self.status_update.emit(f"UID: {uid} | {mem}")
+                                self.title_bar.emit(f"UID: {self.current_uid} > {mem}")
                             else:
                                 self.status_update.emit("Unsupported card detected.")
                     else:
@@ -115,7 +121,8 @@ class NFCHandlerThread(QThread):
                 self.msleep(timeout_duration)
 
             except Exception as e:
-                self.status_update.emit(f"Loop error: {e}")
+                self.error_signal.emit(f"Loop error: {e}")
+                # self.status_update.emit(f"Loop error: {e}")
 
     def stop(self):
         """Signal the loop to exit gracefully."""
@@ -145,7 +152,6 @@ class NFCHandlerThread(QThread):
 
             return "JavaCard v3" in result.stdout
         except Exception as e:
-            print(f"is_jcop3 error: {e}", flush=True)
             return False
 
     def get_memory_status(self):
@@ -155,9 +161,13 @@ class NFCHandlerThread(QThread):
             if memory and memory != -1:
                 free = memory["persistent"]["free"] / 1024
                 percent = memory["persistent"]["percent_free"] * 100
-                return f"Memory Free: {free:.0f}kB ({percent:.0f}%)"
+                t_free = (
+                    memory["transient"]["reset_free"]
+                    + memory["transient"]["deselect_free"]
+                ) / 1024
+                return f"Free Memory > Persistent: {free:.0f}kB / Transient: {t_free:.1f}kB"
             elif memory == -1:
-                    return "Javacard Memory not installed"
+                return "Javacard Memory not installed"
         except Exception as e:
             return f"Memory Error: {e}"
 
@@ -175,7 +185,8 @@ class NFCHandlerThread(QThread):
             cmd = [*self.gp[os.name], "--list", "-r", self.selected_reader_name]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                self.status_update.emit(f"Error listing apps: {result.stderr}")
+                self.error_signal.emit(f"Unable to list apps: {result.stderr}")
+                # self.status_update.emit(f"Error listing apps: {result.stderr}")
                 return {}
 
             lines = result.stdout.splitlines()
@@ -278,16 +289,20 @@ class NFCHandlerThread(QThread):
                 self.installed_apps_updated.emit(installed)
             else:
                 err_msg = f"Install failed: {result.stderr}"
-                self.operation_complete.emit(False, err_msg)
+                # self.operation_complete.emit(False, err_msg)
+                self.error_signal.emit(err_msg)
+                # Let's try to remove the app now
+                self.uninstall_app()
         except Exception as e:
             err_msg = f"Install error: {e}"
-            self.operation_complete.emit(False, err_msg)
+            # self.operation_complete.emit(False, err_msg)
+            self.error_signal.emit(err_msg)
         finally:
             # TODO: Support caching
             if os.path.exists(cap_file_path):
                 os.remove(cap_file_path)
             mem = self.get_memory_status()
-            self.status_update.emit(f"UID: {self.current_uid} | {mem}")
+            self.title_bar.emit(f"UID: {self.current_uid} > {mem}")
 
     def uninstall_app(self, aid, force=False):
         """
@@ -312,13 +327,15 @@ class NFCHandlerThread(QThread):
             else:
                 err_msg = f"Uninstall by AID failed: {result.stderr}"
                 self.operation_complete.emit(False, err_msg)
+                self.error_signal.emit(err_msg)
 
         except Exception as e:
             err_msg = f"Uninstall error (AID): {e}"
             self.operation_complete.emit(False, err_msg)
+            self.error_signal.emit(err_msg)
         finally:
             mem = self.get_memory_status()
-            self.status_update.emit(f"UID: {self.current_uid} | {mem}")
+            self.title_bar.emit(f"UID: {self.current_uid} > {mem}")
 
     def uninstall_app_by_cap(self, cap_file_path, fallback_aid=None, force=False):
         """
@@ -358,7 +375,8 @@ class NFCHandlerThread(QThread):
 
         except Exception as e:
             err_msg = f"Uninstall error (CAP file): {e}"
-            self.status_update.emit(err_msg)
+            # self.status_update.emit(err_msg)
+            self.error_signal.emit(err_msg)
 
             # Attempt fallback if provided
             if fallback_aid:
@@ -373,12 +391,11 @@ class NFCHandlerThread(QThread):
             if os.path.exists(cap_file_path):
                 os.remove(cap_file_path)
             mem = self.get_memory_status()
-            self.status_update.emit(f"UID: {self.current_uid} | {mem}")
+            self.title_bar.emit(f"UID: {self.current_uid} > {mem}")
 
     def stop(self):
         """Signal the loop to exit gracefully."""
         self.running = False
-
 
 
 def resource_path(relative_path):
