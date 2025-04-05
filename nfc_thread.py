@@ -73,8 +73,8 @@ class NFCHandlerThread(QThread):
 
         # OS-specific gp command
         self.gp = {
-            "nt": [resource_path("gp.exe")],
-            "posix": ["java", "-jar", resource_path("gp.jar")],
+            "nt": [resource_path("gp.exe"), "-k", self.key],
+            "posix": ["java", "-jar", resource_path("gp.jar"), "-k", self.key],
         }
 
     def run(self):
@@ -181,7 +181,7 @@ class NFCHandlerThread(QThread):
     def is_jcop3(self, reader_name):
         """Use gp --info to see if 'JavaCard v3' is in the output."""
         try:
-            cmd = [*self.gp[os.name], "--info", "-r", reader_name]
+            cmd = [*self.gp[os.name][0 : len(self.gp) - 3], "--info", "-r", reader_name]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             return "JavaCard v3" in result.stdout
@@ -217,7 +217,7 @@ class NFCHandlerThread(QThread):
 
         try:
             cmd = [
-                *self.gp[os.name],
+                *self.gp[os.name][0:1],
                 "--list",
                 "-r",
                 self.selected_reader_name,
@@ -314,16 +314,16 @@ class NFCHandlerThread(QThread):
             return
 
         try:
+            if self.key is None:
+                # TODO: request key with dialog
+                self.show_key_prompt_signal.emit(self.current_uid)
 
             if self.key is None:
                 # if we still don't have one, don't do anything
                 self.error_signal.emit("No valid key has been provided")
             else:
-                print(f"path: {cap_file_path}")
                 cmd = [
                     *self.gp[os.name],
-                    "-k",
-                    self.key,
                     "--install",
                     cap_file_path,
                     "-r",
@@ -332,7 +332,6 @@ class NFCHandlerThread(QThread):
                 if params and "param_string" in params:
                     # Allow a bit more flexibility
                     cmd.extend(["--params", *params["param_string"].split(" ")])
-                print(cmd)
                 result = subprocess.run(cmd, capture_output=True, text=True)
 
                 if result.returncode == 0 and len(result.stderr) == 0:
@@ -388,7 +387,7 @@ class NFCHandlerThread(QThread):
                 self.error_signal.emit("No valid key has been provided")
                 return
 
-            cmd = [*self.gp[os.name], "-k", self.key, "--uninstall"]
+            cmd = [*self.gp[os.name], "--uninstall"]
             cmd.extend([aid, "-r", self.selected_reader_name])
             if force:
                 cmd.extend("-f")  # or '--force' if gp.jar uses that
@@ -486,7 +485,6 @@ class NFCHandlerThread(QThread):
 
     @pyqtSlot(str)  # This slot is called when the signal is emitted
     def key_setter(self, key):
-        print(f"setting: {key}")
         self.key = key
         self.get_installed_apps()
 
