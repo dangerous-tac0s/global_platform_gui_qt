@@ -203,16 +203,28 @@ class GPManagerApp(QWidget):
                 <= time.time() - 24 * 60 * 60
             ):
                 caps = plugin_instance.fetch_available_caps()
+                if len(caps.keys()) > 0:
+                    self.config["last_checked"][plugin_name] = {}
+                    self.config["last_checked"][plugin_name]["apps"] = caps
+                    self.config["last_checked"][plugin_name]["last"] = time.time()
 
-                self.config["last_checked"][plugin_name] = {}
-                self.config["last_checked"][plugin_name]["apps"] = caps
-                self.config["last_checked"][plugin_name]["last"] = time.time()
-
-                with open("config.json", "w") as fh:
-                    json.dump(self.config, fh, indent=4)
-
+                    self.write_config()
+                else:
+                    self.message_queue.add_message(
+                        "No apps returned. Check connection and/or url."
+                    )
             else:
                 caps = self.config["last_checked"][plugin_name]["apps"]
+
+                if len(caps.keys()) == 0:  # Probably a failure in fetching.
+                    caps = plugin_instance.fetch_available_caps()
+                    if len(caps.keys()) == 0:
+                        self.message_queue.add_message(
+                            f"Unable to fetch apps for {plugin_name}."
+                        )
+                        return
+                self.config["last_checked"][plugin_name]["apps"] = caps
+                self.write_config()
 
             for cap_n, url in caps.items():
                 self.available_apps_info[cap_n] = (plugin_name, url)
@@ -627,10 +639,7 @@ class GPManagerApp(QWidget):
                     key_added = True
 
             if key_added:
-                with open("config.json", "w") as fh:
-                    json.dump(config, fh, indent=4)
-
-                    fh.close()
+                self.write_config()
 
             return config
         else:
