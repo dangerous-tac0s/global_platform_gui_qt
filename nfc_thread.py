@@ -73,8 +73,14 @@ class NFCHandlerThread(QThread):
 
         # OS-specific gp command
         self.gp = {
-            "nt": [resource_path("gp.exe"), "-k", self.key],
-            "posix": ["java", "-jar", resource_path("gp.jar"), "-k", self.key],
+            "nt": [
+                resource_path("gp.exe"),
+            ],
+            "posix": [
+                "java",
+                "-jar",
+                resource_path("gp.jar"),
+            ],
         }
 
     def run(self):
@@ -181,7 +187,7 @@ class NFCHandlerThread(QThread):
     def is_jcop3(self, reader_name):
         """Use gp --info to see if 'JavaCard v3' is in the output."""
         try:
-            cmd = [*self.gp[os.name][0 : len(self.gp) - 3], "--info", "-r", reader_name]
+            cmd = [*self.gp[os.name][0], "-k", self.key, "--info", "-r", reader_name]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             return "JavaCard v3" in result.stdout
@@ -217,7 +223,9 @@ class NFCHandlerThread(QThread):
 
         try:
             cmd = [
-                *self.gp[os.name][0:1],
+                *self.gp[os.name],
+                "-k",
+                self.key,
                 "--list",
                 "-r",
                 self.selected_reader_name,
@@ -301,8 +309,6 @@ class NFCHandlerThread(QThread):
         except Exception as e:
             self.status_update_signal.emit(f"Exception listing apps: {e}")
             print(e)
-            print(self.gp)
-            print(os.path.exists(self.gp["nt"][0]))
             return {}
 
     # ----------------------------
@@ -324,6 +330,8 @@ class NFCHandlerThread(QThread):
             else:
                 cmd = [
                     *self.gp[os.name],
+                    "-k",
+                    self.key,
                     "--install",
                     cap_file_path,
                     "-r",
@@ -332,12 +340,10 @@ class NFCHandlerThread(QThread):
                 if params and "param_string" in params:
                     # Allow a bit more flexibility
                     cmd.extend(["--params", *params["param_string"].split(" ")])
+
                 result = subprocess.run(cmd, capture_output=True, text=True)
 
                 if result.returncode == 0 and len(result.stderr) == 0:
-                    self.operation_complete_signal.emit(
-                        True, f"Installed {cap_file_path}"
-                    )
                     installed = self.get_installed_apps()
                     self.installed_apps_updated_signal.emit(installed)
                 else:
@@ -362,8 +368,10 @@ class NFCHandlerThread(QThread):
             # self.operation_complete.emit(False, err_msg)
             self.error_signal.emit(err_msg)
         finally:
-            # TODO: Support caching
-            if os.path.exists(cap_file_path):
+            if (
+                os.path.exists(cap_file_path)
+                and not self.app.config["cache_latest_release"]
+            ):
                 os.remove(cap_file_path)
             mem = self.get_memory_status()
             self.title_bar_signal.emit(f"UID: {self.current_uid} > {mem}")
@@ -385,9 +393,10 @@ class NFCHandlerThread(QThread):
             if self.key is None:
                 # if we still don't have one, don't do anything
                 self.error_signal.emit("No valid key has been provided")
+                self.operation_complete_signal(False)
                 return
 
-            cmd = [*self.gp[os.name], "--uninstall"]
+            cmd = [*self.gp[os.name], "-k", self.key, "--uninstall"]
             cmd.extend([aid, "-r", self.selected_reader_name])
             if force:
                 cmd.extend("-f")  # or '--force' if gp.jar uses that
@@ -430,7 +439,7 @@ class NFCHandlerThread(QThread):
 
         try:
             # Build the command:
-            cmd = [*self.gp[os.name], "--uninstall"]
+            cmd = [*self.gp[os.name], "-k", self.key, "--uninstall"]
             if force:
                 cmd.append("-f")
             cmd.extend([cap_file_path, "-r", self.selected_reader_name])
@@ -438,9 +447,6 @@ class NFCHandlerThread(QThread):
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 # success
-                self.operation_complete_signal.emit(
-                    True, f"Uninstalled {cap_file_path}"
-                )
                 installed = self.get_installed_apps()
                 self.installed_apps_updated_signal.emit(installed)
             else:

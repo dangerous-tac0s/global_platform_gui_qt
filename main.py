@@ -291,15 +291,16 @@ class GPManagerApp(QWidget):
     def update_card_presence(self, present):
         if present:
             if self.nfc_thread.valid_card_detected:
-                self.install_button.setEnabled(True)
-                self.uninstall_button.setEnabled(True)
-                self.message_queue.add_message("Compatible card detected.")
-                installed = self.nfc_thread.get_installed_apps()
-                self.on_installed_apps_updated(installed)
+                self.message_queue.add_message("Compatible card present.")
+                if self.nfc_thread.key is not None:
+                    self.install_button.setEnabled(True)
+                    self.uninstall_button.setEnabled(True)
+                    installed = self.nfc_thread.get_installed_apps()
+                    self.on_installed_apps_updated(installed)
             else:
                 self.install_button.setEnabled(False)
                 self.uninstall_button.setEnabled(False)
-                self.message_queue.add_message("Unsupported card detected.")
+                self.message_queue.add_message("Unsupported card present.")
         else:
             self.install_button.setEnabled(False)
             self.uninstall_button.setEnabled(False)
@@ -319,7 +320,9 @@ class GPManagerApp(QWidget):
         """
         local_path = os.path.join(CAP_DOWNLOAD_DIR, cap_name)
         if os.path.exists(local_path):
-            self.message_queue.add_message(f"Using cached: {local_path}")
+            self.message_queue.add_message(
+                f"Using cached: {local_path.split(os.path.sep)[-1]}"
+            )
             on_complete(local_path)
             return
 
@@ -409,7 +412,9 @@ class GPManagerApp(QWidget):
     def on_install_download_complete(self, file_path, params=None):
         self.download_bar.hide()
         self.download_bar.setValue(0)
-        self.message_queue.add_message(f"Installing: {file_path}")
+        self.message_queue.add_message(
+            f"Installing: {file_path.split(os.path.sep)[-1]}"
+        )
         self.nfc_thread.install_app(file_path, params)
 
     #
@@ -454,7 +459,9 @@ class GPManagerApp(QWidget):
     def on_uninstall_download_complete(self, file_path, params=None):
         self.download_bar.hide()
         self.download_bar.setValue(0)
-        self.message_queue.add_message(f"Uninstalling with {file_path}")
+        self.message_queue.add_message(
+            f"Uninstalling with {file_path.split(os.path.sep)[-1]}"
+        )
 
         if self.current_plugin:
             # Ask the plugin for its fallback AID list for the selected cap.
@@ -471,13 +478,16 @@ class GPManagerApp(QWidget):
     #
     #  Operation Complete
     #
-    def on_operation_complete(self, success, message):
+    def on_operation_complete(self, success, message=None):
         self.download_bar.hide()
         self.download_bar.setValue(0)
-        self.install_button.setEnabled(True)
-        self.uninstall_button.setEnabled(True)
+        if self.nfc_thread.key is not None:
+            self.install_button.setEnabled(True)
+            self.uninstall_button.setEnabled(True)
 
-        self.message_queue.add_message(message)
+        if message is not None:
+            self.message_queue.add_message("Compatible card present.")
+
         if success and self.current_plugin:
             try:
                 self.current_plugin.post_install()
@@ -537,6 +547,7 @@ class GPManagerApp(QWidget):
 
             self.installed_list.addItem(display_text)
         self.populate_available_list()
+        self.on_operation_complete(True)
 
     #
     #  Utility
@@ -553,6 +564,9 @@ class GPManagerApp(QWidget):
         is_default_key = self.config["known_tags"].get(uid, None)
         if is_default_key:
             self.nfc_thread.key_setter_signal.emit(DEFAULT_KEY)
+            self.nfc_thread.status_update_signal.emit("Key set.")
+            self.update_card_presence(True)
+
         else:
             if is_default_key is None:
                 res = self.prompt_for_key(uid)
@@ -566,6 +580,8 @@ class GPManagerApp(QWidget):
                 return
             else:
                 self.nfc_thread.key_setter_signal.emit(res["key"])
+                self.update_card_presence(True)
+                self.nfc_thread.status_update_signal.emit("Key set.")
 
     def prompt_for_key(self, uid: str, existing_key: str = None):
         dialog = KeyDialog(uid=uid, exiting_key=existing_key)  # No existing key

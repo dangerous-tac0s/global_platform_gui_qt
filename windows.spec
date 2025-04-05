@@ -23,6 +23,7 @@ exe = EXE(
     a.datas,
     [],
     name='gp_gui.exe',
+    version='version_info.txt',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
