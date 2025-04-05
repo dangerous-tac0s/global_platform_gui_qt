@@ -1,10 +1,12 @@
 # main.py
+import json
 import sys
 import os
 import tempfile
 import importlib
+import time
 
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -18,11 +20,14 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QMessageBox,
     QFrame,
+    QDialog,
+    QLineEdit,
+    QFormLayout,
 )
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, QObject, QEvent, Qt, pyqtSlot
 
 from file_thread import FileHandlerThread
-from nfc_thread import NFCHandlerThread, resource_path
+from nfc_thread import NFCHandlerThread, resource_path, DEFAULT_KEY
 
 APP_TITLE = "GlobalPlatformPro App Manager"
 
@@ -134,6 +139,9 @@ class GPManagerApp(QWidget):
         self.layout.addWidget(self.status_label)
         self.message_queue = MessageQueue(self.status_label)
 
+        self.config = self.load_config()
+        self.key = None
+
         self.layout.addWidget(horizontal_rule())
 
         # Reader selection row
@@ -189,7 +197,23 @@ class GPManagerApp(QWidget):
         self.available_apps_info = {}
         for plugin_name, plugin_cls in self.plugin_map.items():
             plugin_instance = plugin_cls()
-            caps = plugin_instance.fetch_available_caps()  # e.g. {cap_name: url}
+            if (
+                not self.config["last_checked"].get(plugin_name, False)
+                or self.config["last_checked"][plugin_name]["last"]
+                <= time.time() - 24 * 60 * 60
+            ):
+                caps = plugin_instance.fetch_available_caps()
+
+                self.config["last_checked"][plugin_name] = {}
+                self.config["last_checked"][plugin_name]["apps"] = caps
+                self.config["last_checked"][plugin_name]["last"] = time.time()
+
+                with open("config.json", "w") as fh:
+                    json.dump(self.config, fh, indent=4)
+
+            else:
+                caps = self.config["last_checked"][plugin_name]["apps"]
+
             for cap_n, url in caps.items():
                 self.available_apps_info[cap_n] = (plugin_name, url)
 
@@ -202,20 +226,28 @@ class GPManagerApp(QWidget):
         #
         # 4) Start NFC handler
         #
-        self.nfc_thread = NFCHandlerThread()
-        self.nfc_thread.readers_updated.connect(self.update_readers)
-        self.nfc_thread.card_present.connect(self.update_card_presence)
-        self.nfc_thread.status_update.connect(self.process_nfc_status)
-        self.nfc_thread.operation_complete.connect(self.on_operation_complete)
-        self.nfc_thread.installed_apps_updated.connect(self.on_installed_apps_updated)
+        self.nfc_thread = NFCHandlerThread(self)
+        self.nfc_thread.readers_updated_signal.connect(self.readers_updated)
+        self.nfc_thread.card_present_signal.connect(self.update_card_presence)
+        self.nfc_thread.status_update_signal.connect(self.process_nfc_status)
+        self.nfc_thread.operation_complete_signal.connect(self.on_operation_complete)
+        self.nfc_thread.installed_apps_updated_signal.connect(
+            self.on_installed_apps_updated
+        )
         self.nfc_thread.error_signal.connect(self.show_error_dialog)
-        self.nfc_thread.title_bar.connect(self.update_title_bar)
-        self.nfc_thread.start()
+        self.nfc_thread.title_bar_signal.connect(self.update_title_bar)
+        self.nfc_thread.known_tags_update_signal.connect(self.update_known_tags)
+
+        self.nfc_thread.show_key_prompt_signal.connect(self.prompt_for_key)
+        self.nfc_thread.get_key_signal.connect(self.get_key)
+        self.nfc_thread.key_setter_signal.connect(self.nfc_thread.key_setter)
 
         # Initially disable install/uninstall
         self.install_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
         self.current_plugin = None
+
+        self.nfc_thread.start()
 
     def populate_available_list(self):
         self.available_list.clear()
@@ -228,7 +260,7 @@ class GPManagerApp(QWidget):
         reader_name = self.reader_dropdown.itemText(index)
         self.nfc_thread.selected_reader_name = reader_name
 
-    def update_readers(self, readers_list):
+    def readers_updated(self, readers_list):
         self.reader_dropdown.blockSignals(True)
         self.reader_dropdown.clear()
 
@@ -517,11 +549,153 @@ class GPManagerApp(QWidget):
     def show_error_dialog(self, message: str):
         QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
 
+    def get_key(self, uid):
+        is_default_key = self.config["known_tags"].get(uid, None)
+        if is_default_key:
+            self.nfc_thread.key_setter_signal.emit(DEFAULT_KEY)
+        else:
+            if is_default_key is None:
+                res = self.prompt_for_key(uid)
+            else:
+                # TODO: check secure storage for key
+                res = self.prompt_for_key(uid, "sds")
+
+            if res and res.get("key", False) is False:
+                self.show_error_dialog("No key found.")
+            elif res is None:
+                return
+            else:
+                self.nfc_thread.key_setter_signal.emit(res["key"])
+
+    def prompt_for_key(self, uid: str, existing_key: str = None):
+        dialog = KeyDialog(uid=uid, exiting_key=existing_key)  # No existing key
+        if dialog.exec_():  # Show dialog and wait for user action
+            res = dialog.get_results()
+
+            if not self.config["known_tags"].get(res["uid"]):
+                self.config["known_tags"][res["uid"]] = None
+            self.update_known_tags(res["uid"], res["key"] == DEFAULT_KEY)
+
+            return res
+
     def update_title_bar(self, message: str):
         if not "None" in message and len(message) > 0:
             self.setWindowTitle(f"{message}")
         else:
             self.setWindowTitle(APP_TITLE)
+
+    def load_config(self):
+        """
+        [dict[str, bool]] known_keys:
+            [bool] uid:str - if the UID uses a default key, true, else false
+        [bool] cache_latest_release=False
+        """
+        default_config = {
+            "cache_latest_release": False,
+            # [app]: epoch time
+            "last_checked": {},
+            "known_tags": {},
+        }
+        if os.path.exists("config.json"):
+            with open("config.json", "r") as fh:
+                config = json.load(fh)
+
+                fh.close()
+                # todo: validate
+
+            # Did I update something? Let's make sure the config is updated.
+            key_added = False
+            for key in default_config.keys():
+                if config.get(key) is None:
+                    config[key] = default_config[key]
+                    key_added = True
+
+            if key_added:
+                with open("config.json", "w") as fh:
+                    json.dump(config, fh, indent=4)
+
+                    fh.close()
+
+            return config
+        else:
+            # create default
+            with open("config.json", "w") as fh:
+                json.dump(default_config, fh, indent=4)
+
+            return default_config
+
+    def write_config(self):
+        with open("config.json", "w") as fh:
+            json.dump(self.config, fh, indent=4)
+            fh.close()
+
+    def update_known_tags(self, uid: str, default_key: bool):
+        if self.config["known_tags"].get(uid) is None:
+            self.config["known_tags"][uid] = default_key
+            self.message_queue.add_message(
+                f"Added {uid} to known tags. Default key: {default_key}"
+            )
+        else:
+            if self.config["known_tags"][uid] != default_key:
+                self.config["known_tags"][uid] = default_key
+                self.message_queue.add_message(
+                    f"Updated {uid}. Default key: {default_key}"
+                )
+        self.write_config()
+
+    def query_known_tags(self, uid: str) -> bool:
+        """
+        Returns a bool if the tag is known
+        - The bool indicates whether it has a default key
+        Returns None when the tag is not known
+        """
+        print(f"query: {self.config["known_tags"].get(uid)}")
+        default_key = self.config["known_tags"].get(uid, False)
+        return default_key
+
+
+class KeyDialog(QDialog):
+    def __init__(self, uid: str, exiting_key=None):
+        super().__init__()
+        if exiting_key is None or exiting_key != "None":
+            dialog_title = "New Smart Card Found!"
+        else:
+            dialog_title = "Update Smart Card Key"
+
+        self.setWindowTitle(dialog_title)
+        layout = QFormLayout()
+
+        self.uid = uid
+
+        self.label = QLabel("Enter key:")
+        layout.addRow(self.label)
+
+        self.input_field = QLineEdit()
+
+        if exiting_key is None or exiting_key != "None":
+            self.input_field.setText(DEFAULT_KEY)
+        else:
+            self.input_field.setText(exiting_key)
+        layout.addRow(self.input_field)
+
+        self.reset = QPushButton("Reset to Default")
+        self.reset.clicked.connect(self.set_input_to_default)
+
+        self.submit = QPushButton("OK")
+        self.submit.clicked.connect(self.accept)
+
+        layout.addRow(self.reset, self.submit)
+        self.setLayout(layout)
+        self.setFixedWidth(800)
+
+    def get_input(self):
+        return self.input_field.text()
+
+    def get_results(self):
+        return {"uid": self.uid, "key": self.input_field.text()}
+
+    def set_input_to_default(self):
+        self.input_field.setText(DEFAULT_KEY)
 
 
 def horizontal_rule():
@@ -532,9 +706,29 @@ def horizontal_rule():
     return h_line
 
 
+class HelpEventFilter(QObject):
+    """
+    TODO: Add help context to populate this with the most relevant information
+    """
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_F1:
+            self.show_help_window()
+            return True  # Event handled
+        return super().eventFilter(obj, event)
+
+    def show_help_window(self):
+        QMessageBox.information(None, "Help", "This is the help window!")
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
     app.setWindowIcon(QIcon(resource_path("favicon.ico")))
+
+    font = QFont("Courier New", 10)
+    app.setFont(font)
+
     window = GPManagerApp()
     window.show()
     sys.exit(app.exec_())
