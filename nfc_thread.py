@@ -5,7 +5,7 @@ import sys
 import zipfile
 
 import chardet
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QMetaObject, Q_ARG, pyqtSlot
+from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot
 from smartcard.System import readers
 from smartcard.Exceptions import NoCardException, CardConnectionException
 from smartcard.util import toHexString
@@ -48,7 +48,6 @@ class NFCHandlerThread(QThread):
     show_key_prompt_signal = pyqtSignal(str, str)
 
     # Known tag handling
-    # known_tags_query = pyqtSignal(str)
     known_tags_update_signal = pyqtSignal(str, bool)
 
     get_key_signal = pyqtSignal(str)
@@ -172,7 +171,10 @@ class NFCHandlerThread(QThread):
             return None
 
     def is_jcop(self):
-        """Send SELECT APDUs"""
+        """
+        Send GP SELECT APDUs
+            7816-4 SELECT is different
+        """
         SELECT = [0x00, 0xA4, 0x04, 0x00, 0x00]
         try:
             reader = next(x for x in readers() if self.selected_reader_name in str(x))
@@ -267,7 +269,6 @@ class NFCHandlerThread(QThread):
                             # We'll handle the APP line after the loop continues
                             pass
                     else:
-                        # Possibly lines like "Version:  1.0" or "Applet:   A000000308000010000100"
                         if "Version:" in line:
                             # e.g. "Version:  1.0"
                             # parse out version number
@@ -450,25 +451,17 @@ class NFCHandlerThread(QThread):
                 installed = self.get_installed_apps()
                 self.installed_apps_updated_signal.emit(installed)
             else:
-                # Fail => fallback to AID if provided
-                # err_msg = f"Uninstall by CAP file failed: {result.stderr}"
-                # self.status_update.emit(err_msg)
-
                 manifest = extract_manifest_from_cap(cap_file_path)
 
                 fallback_aid = get_selected_manifest(manifest)["aid"]
 
                 if fallback_aid:
-                    # self.status_update.emit(
-                    #     f"Falling back to AID-based uninstall: {fallback_aid}"
-                    # )
                     self.uninstall_app(fallback_aid, force=force)
                 else:
                     self.operation_complete_signal.emit(False, "Failed to uninstall")
 
         except Exception as e:
             err_msg = f"Uninstall error (CAP file): {e}"
-            # self.status_update.emit(err_msg)
             self.error_signal.emit(err_msg)
 
             # Attempt fallback if provided
@@ -489,8 +482,12 @@ class NFCHandlerThread(QThread):
     def get_key(self):
         self.get_key_signal.emit()
 
-    @pyqtSlot(str)  # This slot is called when the signal is emitted
+    @pyqtSlot(str)
     def key_setter(self, key):
+        """
+        Triggered from the UI on submit
+        from the prompt for key dialog
+        """
         self.key = key
         self.get_installed_apps()
 

@@ -262,6 +262,56 @@ class GPManagerApp(QWidget):
 
         self.nfc_thread.start()
 
+    def update_plugin_releases(self):
+        self.message_queue.add_message("Fetching latest plugin releases...")
+        updated = False
+        for plugin_name, plugin_cls in self.plugin_map.items():
+            plugin_instance = plugin_cls()
+            caps = plugin_instance.fetch_available_caps()
+
+            if len(caps.keys()) > 0:
+                updated = True
+                self.config["last_checked"][plugin_name] = {}
+                self.config["last_checked"][plugin_name]["apps"] = caps
+                self.config["last_checked"][plugin_name]["last"] = time.time()
+
+                self.write_config()
+
+                # Update the available list
+                for cap_n, url in caps.items():
+                    self.available_apps_info[cap_n] = (plugin_name, url)
+
+            else:
+                self.message_queue.add_message(
+                    "No apps returned. Check connection and/or url."
+                )
+
+        if updated:
+            self.write_config()  # save state
+            self.populate_available_list()  # Push the update
+            self.message_queue.add_message("Updated plugin releases.")
+        else:
+            self.message_queue.add_message("No new plugin releases found.")
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F1:
+            self.on_f1_pressed(event)
+        elif event.key() == Qt.Key_F4:
+            self.on_f4_pressed(event)
+
+    def on_f1_pressed(self, event):
+        """
+        TODO: HELP! I NEED SOMEBODY! HELP! NOT JUST ANYBODY!
+        """
+        print("F1")
+        pass
+
+    def on_f4_pressed(self, event):
+        """
+        Force checking plugin resources for updates
+        """
+        self.update_plugin_releases()
+
     def populate_available_list(self):
         self.available_list.clear()
         for cap_name, (plugin_name, url) in self.available_apps_info.items():
@@ -758,7 +808,7 @@ class HelpEventFilter(QObject):
         return super().eventFilter(obj, event)
 
     def show_help_window(self):
-        QMessageBox.information(None, "Help", "This is the help window!")
+        QDialog.information(None, "Help", "This is the help window!")
 
 
 if __name__ == "__main__":
