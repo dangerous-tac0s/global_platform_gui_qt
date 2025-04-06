@@ -189,6 +189,11 @@ class NFCHandlerThread(QThread):
     def is_jcop3(self, reader_name):
         """Use gp --info to see if 'JavaCard v3' is in the output."""
         try:
+            if (
+                self.key is None
+                or self.app.config["known_tags"].get(self.current_uid, None) is None
+            ):
+                return  # Protect unknown tags
             cmd = [*self.gp[os.name][0], "-k", self.key, "--info", "-r", reader_name]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -222,6 +227,12 @@ class NFCHandlerThread(QThread):
         if not self.selected_reader_name:
             self.status_update_signal.emit("No reader selected for get_installed_apps.")
             return {}
+
+        if (
+            self.key is None
+            or self.app.config["known_tags"].get(self.current_uid, None) is None
+        ):
+            return  # Protect unknown tags
 
         try:
             cmd = [
@@ -320,6 +331,11 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, "No reader selected.")
             return
 
+        if self.key is None or self.app.config["known_tags"].get(
+            self.current_uid, None
+        ):
+            return  # Protect unknown tags
+
         try:
             if self.key is None:
                 # TODO: request key with dialog
@@ -386,6 +402,12 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, "No reader selected.")
             return
 
+        if (
+            self.key is None
+            or self.app.config["known_tags"].get(self.current_uid, None) is None
+        ):
+            return  # Protect unknown tags
+
         try:
             if self.key is None:
                 # TODO: request key with dialog
@@ -438,6 +460,12 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, "No reader selected.")
             return
 
+        if (
+            self.key is None
+            or self.app.config["known_tags"].get(self.current_uid, None) is None
+        ):
+            return  # Protect unknown tags
+
         try:
             # Build the command:
             cmd = [*self.gp[os.name], "-k", self.key, "--uninstall"]
@@ -489,7 +517,8 @@ class NFCHandlerThread(QThread):
         from the prompt for key dialog
         """
         self.key = key
-        self.get_installed_apps()
+        if self.key is not None:
+            self.get_installed_apps()
 
     def stop(self):
         """Signal the loop to exit gracefully."""

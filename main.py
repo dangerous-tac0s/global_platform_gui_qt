@@ -796,21 +796,6 @@ def horizontal_rule():
     return h_line
 
 
-class HelpEventFilter(QObject):
-    """
-    TODO: Add help context to populate this with the most relevant information
-    """
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_F1:
-            self.show_help_window()
-            return True  # Event handled
-        return super().eventFilter(obj, event)
-
-    def show_help_window(self):
-        QDialog.information(None, "Help", "This is the help window!")
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
