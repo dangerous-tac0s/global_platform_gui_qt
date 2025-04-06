@@ -12,6 +12,7 @@ Looking for more information? Checkout the [flexSecure repo docs](https://github
 Rebooted from Tkinter to PyQt. Still early.
 
 Features:
+- Supports non-default keys
 - Decodes AIDs to names of flexSecure apps
 - Reports available memory (if app is installed)
 - Installs the latest version of an app
@@ -24,7 +25,9 @@ Features:
 - 'Plugins' can be made to support other resources and advanced (read: requires params) installs
 - Will probably break at random
 
-<img src="screenshot.png" width=350/>
+<img src="screenshot_key_prompt.png" width=350 /><br />
+
+<img src="screenshot.png" width=350/><br />
 
 <img src="screenshot_ndef.png" width=350/>
 
@@ -34,7 +37,9 @@ Features:
 - No real validation URI record creation
 
 ## Forthcoming
-- Non-standard key handling
+- Support for changing your key
+- Secure storage for keys and the like
+- App details/description/storage requirements
 - Better NDEF support
   - Support encrypted records like @hoker's Apex Manager?
   - Support writing of NDEF records to NTAGs, DESFire, etc?
