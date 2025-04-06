@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QFormLayout,
 )
-from PyQt5.QtCore import QTimer, QObject, QEvent, Qt, pyqtSlot
+from PyQt5.QtCore import QTimer, QObject, QEvent, Qt, QSize
 
 from file_thread import FileHandlerThread
 from nfc_thread import NFCHandlerThread, resource_path, DEFAULT_KEY
@@ -131,7 +131,6 @@ class GPManagerApp(QWidget):
         self.setWindowTitle(APP_TITLE)
         self.setWindowIcon(QIcon(resource_path("favicon.ico")))
 
-        self.resize(*width_height)
         self.layout = QVBoxLayout()
 
         # Status label at the top
@@ -140,6 +139,8 @@ class GPManagerApp(QWidget):
         self.message_queue = MessageQueue(self.status_label)
 
         self.config = self.load_config()
+        self.resize(self.config["window"]["width"], self.config["window"]["height"])
+        self.write_config()
         self.key = None
 
         self.layout.addWidget(horizontal_rule())
@@ -623,6 +624,11 @@ class GPManagerApp(QWidget):
             # [app]: epoch time
             "last_checked": {},
             "known_tags": {},
+            "window": {
+                "height": width_height[1],
+                "width": width_height[0],
+                # "font_size": ""
+            },
         }
         if os.path.exists("config.json"):
             with open("config.json", "r") as fh:
@@ -637,9 +643,6 @@ class GPManagerApp(QWidget):
                 if config.get(key) is None:
                     config[key] = default_config[key]
                     key_added = True
-
-            if key_added:
-                self.write_config()
 
             return config
         else:
@@ -677,6 +680,18 @@ class GPManagerApp(QWidget):
         print(f"query: {self.config["known_tags"].get(uid)}")
         default_key = self.config["known_tags"].get(uid, False)
         return default_key
+
+    def resizeEvent(self, event):
+        new_size = event.size()
+
+        self.on_resize(new_size)
+        super().resizeEvent(event)
+
+    def on_resize(self, size: QSize):
+        self.config["window"]["width"] = size.width()
+        self.config["window"]["height"] = size.height()
+
+        self.write_config()
 
 
 class KeyDialog(QDialog):
