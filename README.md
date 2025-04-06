@@ -6,7 +6,8 @@ Tons of credit go to [@Stargate01](https://github.com/stargate01), [@GrimEcho](h
 Looking for more information? Checkout the [flexSecure repo docs](https://github.com/DangerousThings/flexsecure-applets/tree/master/docs).
 
 > [!CAUTION]
-> DO NOT USE ON APEX DEVICES OR THOSE OTHERWISE CONFIGURED WITH NON-DEFAULT PASSWORDS--THE DEVICE WILL BE BRICKED!
+> Disclaimer: Use at your own risk. I'm not liable for bricked chips.<br />
+> DO NOT USE ON APEX DEVICES--THE DEVICE WILL BE BRICKED!
 
 Rebooted from Tkinter to PyQt. Still early.
 

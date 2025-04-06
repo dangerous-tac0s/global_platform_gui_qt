@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import time
+
 from smartcard.Exceptions import CardConnectionException, NoCardException
 from smartcard.System import readers
 
@@ -36,25 +38,20 @@ def get_memory(reader=0, retry=0):
                     0x01,
                 ]
             )
-        except CardConnectionException as e:
-            if retry > 3:
+        except (CardConnectionException, NoCardException) as e:
+            if retry > 10:
                 print(e)
                 return None
 
+            time.sleep(0.1)
             return get_memory(reader, retry=retry + 1)
 
-        except NoCardException as e:
-            if retry > 3:
-                print(e)
-                return None
-
-            return get_memory(reader, retry=retry + 1)
-
+        connection.disconnect()
         if sw1 == 0x90 and sw2 == 0x00:
             # success: Applet selected, card response is ok
             # Parse response
             memory_persistent = int.from_bytes(data[0:4], "big")
-            memory_persistent_total = int.from_bytes(data[5:7], "big")
+            memory_persistent_total = int.from_bytes(data[4:8], "big")
             memory_persistent_percentage = min(
                 ## 99% at most because we'll at least have free memory installed
                 0.99,
@@ -66,8 +63,6 @@ def get_memory(reader=0, retry=0):
                 1.0,
                 (((memory_transient_reset + memory_transient_deselect) / 2.0) / 4096.0),
             )
-
-            connection.disconnect()
 
             return {
                 # Storage
@@ -87,10 +82,7 @@ def get_memory(reader=0, retry=0):
         else:
             sw1 = f"{sw1:02x}"
             sw2 = f"{sw2:02x}"
-            print("error: Card response: " + f"{sw1}" + " " + f"{sw2}")
 
             if sw1 == "6a" and sw2 == "82":
                 # App not installed
                 return -1
-
-        connection.disconnect()

@@ -12,10 +12,10 @@ flexsecure_applets plugin: Manages all .cap files and their associated AIDs for 
 # AID map: maps cap filenames to their corresponding AID strings.
 FLEXSECURE_AID_MAP = {
     "javacard-memory.cap": "A0000008466D656D6F727901",
-    "keycard.cap": "A0000008040001",
-    "openjavacard-ndef-full.cap": "D2760000850101",
+    # "keycard.cap": "A0000008040001", # TODO: Add support for selecting apps in multi-app cap
+    # "openjavacard-ndef-full.cap": "D2760000850101", # Use this for disgustingly large RSA keys. Consider ECC instead. Seriously.
     "SatoChip.cap": "5361746F4368697000",
-    "Satodime.cap": "5361746F44696D6500",
+    # "Satodime.cap": "5361746F44696D6500", # This doesn't work with DT/VK products
     "SeedKeeper.cap": "536565644B656570657200",
     "SmartPGPApplet-default.cap": "D276000124010304000A000000000000",
     "U2FApplet.cap": "A0000006472F0002",
