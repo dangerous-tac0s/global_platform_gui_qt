@@ -12,14 +12,15 @@ flexsecure_applets plugin: Manages all .cap files and their associated AIDs for 
 # AID map: maps cap filenames to their corresponding AID strings.
 FLEXSECURE_AID_MAP = {
     "javacard-memory.cap": "A0000008466D656D6F727901",
-    # "keycard.cap": "A0000008040001", # TODO: Add support for selecting apps in multi-app cap
+    "keycard.cap": "A0000008040001",  # TODO: Add support for selecting apps in multi-app cap
     "openjavacard-ndef-full.cap": "D2760000850101",
     "SatoChip.cap": "5361746F4368697000",
-    # "Satodime.cap": "5361746F44696D6500", # This doesn't work with DT/VK products
+    "Satodime.cap": "5361746F44696D6500",  # This doesn't work with DT/VK products
     "SeedKeeper.cap": "536565644B656570657200",
     "SmartPGPApplet-default.cap": "D276000124010304000A000000000000",
-    # "SmartPGPApplet-large.cap": "D276000124010304000A000000000000", # Use this for disgustingly large RSA keys. Consider ECC instead. Seriously.
+    "SmartPGPApplet-large.cap": "D276000124010304000A000000000000",  # Use this for disgustingly large RSA keys. Consider ECC instead. Seriously.
     "U2FApplet.cap": "A0000006472F0002",
+    "FIDO2.cap": "A0000006472F0001",
     "vivokey-otp.cap": "A0000005272101014150455801",
     "YkHMACApplet.cap": "A000000527200101",
 }
@@ -30,6 +31,8 @@ FLEXSECURE_NAME_TO_DETAILS = {
         "description": "This is used to estimate memory usage on your smart card.",  # text or markdown file
     }
 }
+
+UNSUPPORTED_APPS = ["FIDO2.cap", "Satodime.cap", "keycard.cap"]
 
 # GitHub repository information for this plugin.
 OWNER = "DangerousThings"
@@ -106,7 +109,7 @@ def fetch_flexsecure_release(
                 name = asset["name"]
                 dl_url = asset["browser_download_url"]
                 # Ensure the asset name is in the FLEXSECURE_AID_MAP if needed
-                if name in FLEXSECURE_AID_MAP.keys():
+                if name not in UNSUPPORTED_APPS:
                     results[name] = dl_url
 
         if verbose:
