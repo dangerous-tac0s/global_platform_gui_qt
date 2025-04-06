@@ -13,14 +13,22 @@ flexsecure_applets plugin: Manages all .cap files and their associated AIDs for 
 FLEXSECURE_AID_MAP = {
     "javacard-memory.cap": "A0000008466D656D6F727901",
     # "keycard.cap": "A0000008040001", # TODO: Add support for selecting apps in multi-app cap
-    # "openjavacard-ndef-full.cap": "D2760000850101", # Use this for disgustingly large RSA keys. Consider ECC instead. Seriously.
+    "openjavacard-ndef-full.cap": "D2760000850101",
     "SatoChip.cap": "5361746F4368697000",
     # "Satodime.cap": "5361746F44696D6500", # This doesn't work with DT/VK products
     "SeedKeeper.cap": "536565644B656570657200",
     "SmartPGPApplet-default.cap": "D276000124010304000A000000000000",
+    # "SmartPGPApplet-large.cap": "D276000124010304000A000000000000", # Use this for disgustingly large RSA keys. Consider ECC instead. Seriously.
     "U2FApplet.cap": "A0000006472F0002",
     "vivokey-otp.cap": "A0000005272101014150455801",
     "YkHMACApplet.cap": "A000000527200101",
+}
+
+FLEXSECURE_NAME_TO_DETAILS = {
+    "javacard-memory.cap": {
+        "name": "",
+        "description": "This is used to estimate memory usage on your smart card.",  # text or markdown file
+    }
 }
 
 # GitHub repository information for this plugin.
@@ -92,12 +100,14 @@ def fetch_flexsecure_release(
 
         results = {}
         for asset in assets:
-            if ".cap" in asset["name"]:  # Some releases have .jar files
+            if (
+                ".cap" in asset["name"] and asset["name"]
+            ):  # Some releases have .jar files
                 name = asset["name"]
                 dl_url = asset["browser_download_url"]
                 # Ensure the asset name is in the FLEXSECURE_AID_MAP if needed
-                # if name in FLEXSECURE_AID_MAP:
-                results[name] = dl_url
+                if name in FLEXSECURE_AID_MAP.keys():
+                    results[name] = dl_url
 
         if verbose:
             return {"apps": results, "version": data["tag_name"]}
