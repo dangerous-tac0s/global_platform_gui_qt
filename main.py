@@ -4,8 +4,10 @@ import sys
 import os
 import tempfile
 import importlib
+import textwrap
 import time
 
+import markdown
 from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import (
     QApplication,
@@ -23,6 +25,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QLineEdit,
     QFormLayout,
+    QTextBrowser,
 )
 from PyQt5.QtCore import QTimer, QObject, QEvent, Qt, QSize
 
@@ -173,7 +176,11 @@ class GPManagerApp(QWidget):
         self.uninstall_button.clicked.connect(self.uninstall_app)
         grid_layout.addWidget(self.uninstall_button, 2, 0)
 
-        self.layout.addLayout(grid_layout)
+        self.apps_grid_layout = grid_layout
+        self.installed_list.currentItemChanged.connect(self.show_details_pane)
+        self.available_list.currentItemChanged.connect(self.show_details_pane)
+
+        self.layout.addLayout(self.apps_grid_layout)
 
         # Progress bar for downloads
         self.download_bar = QProgressBar()
@@ -196,6 +203,7 @@ class GPManagerApp(QWidget):
         #    from each plugin
         #
         self.available_apps_info = {}
+        self.app_descriptions = {}
         for plugin_name, plugin_cls in self.plugin_map.items():
             plugin_instance = plugin_cls()
             if (
@@ -230,6 +238,11 @@ class GPManagerApp(QWidget):
             for cap_n, url in caps.items():
                 self.available_apps_info[cap_n] = (plugin_name, url)
 
+            descriptions = plugin_instance.get_descriptions()
+
+            for cap_n, description_md in descriptions.items():
+                self.app_descriptions[cap_n] = description_md
+
         #
         # 3) Populate the "Available Apps" list from self.available_apps_info,
         #    skipping unsupported apps
@@ -262,6 +275,85 @@ class GPManagerApp(QWidget):
 
         self.nfc_thread.start()
 
+    def handle_details_pane_back(self):
+        # Remove the details pane
+        items = [
+            self.apps_grid_layout.itemAtPosition(0, 0),
+            self.apps_grid_layout.itemAtPosition(2, 0),
+        ]
+        for item in items:
+            if item:
+                widget = item.widget()
+                if widget:
+                    self.apps_grid_layout.removeWidget(widget)
+                    widget.setParent(None)
+
+        # Replace with the appropriate widgets
+        self.apps_grid_layout.addWidget(QLabel("Installed Apps"), 0, 0)
+        self.apps_grid_layout.addWidget(self.installed_list, 1, 0)
+        self.apps_grid_layout.addWidget(self.uninstall_button, 2, 0)
+
+    def show_details_pane(self, changed_list):
+        """
+        Swaps installed/available columns for details pane
+        """
+        selected_app = changed_list.text()
+
+        if self.app_descriptions.get(selected_app) is None:
+            return  # description is missing
+
+        is_installed_apps = False
+        is_showing_details = False
+
+        viewer = QTextBrowser()
+        viewer.setHtml(
+            markdown.markdown(textwrap.dedent(self.app_descriptions[selected_app]))
+        )
+
+        if (
+            not self.apps_grid_layout.itemAtPosition(1, 0).widget()
+            == self.installed_list
+            and not is_installed_apps
+        ) or (
+            not self.apps_grid_layout.itemAtPosition(1, 1).widget()
+            == self.available_list
+            and is_installed_apps
+        ):
+            is_showing_details = True
+
+        if not is_showing_details:
+            for row in range(0, 3):
+                item = self.apps_grid_layout.itemAtPosition(row, 0)
+                if item:
+                    widget = item.widget()
+                    if widget:
+                        self.apps_grid_layout.removeWidget(widget)
+                        widget.setParent(None)
+
+            self.apps_grid_layout.addWidget(viewer, 0, 0, 2, 1)
+            back_button = QPushButton("Back")
+            back_button.clicked.connect(self.handle_details_pane_back)
+
+            self.apps_grid_layout.addWidget(back_button, 2, 0)
+        else:
+            self.apps_grid_layout.removeWidget(
+                self.apps_grid_layout.itemAtPosition(0, 0).widget()
+            )
+            self.apps_grid_layout.addWidget(viewer, 0, 0, 2, 1)
+
+        print(selected_app)
+        print(f"showing details: {is_showing_details}")
+
+        """
+        TODO: DETAILS PANE
+        - should render markdown
+        - button at bottom is labeled "back" and negates selection
+            and re-shows the hidden list
+        """
+        # frame = QFrame()
+        # back_button = QPushButton("Back")
+        # frame.addWidget(back_button)
+
     def update_plugin_releases(self):
         self.message_queue.add_message("Fetching latest plugin releases...")
         updated = False
@@ -281,6 +373,12 @@ class GPManagerApp(QWidget):
                 for cap_n, url in caps.items():
                     self.available_apps_info[cap_n] = (plugin_name, url)
 
+                # Update descriptions
+                descriptions = plugin_instance.get_descriptions()
+
+                for cap_n, description_md in descriptions:
+                    self.app_descriptions[cap_n] = description_md
+
             else:
                 self.message_queue.add_message(
                     "No apps returned. Check connection and/or url."
@@ -291,7 +389,7 @@ class GPManagerApp(QWidget):
             self.populate_available_list()  # Push the update
             self.message_queue.add_message("Updated plugin releases.")
         else:
-            self.message_queue.add_message("No new plugin releases found.")
+            self.message_queue.add_message("No plugin releases found.")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_F1:

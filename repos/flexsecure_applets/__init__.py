@@ -25,12 +25,6 @@ FLEXSECURE_AID_MAP = {
     "YkHMACApplet.cap": "A000000527200101",
 }
 
-FLEXSECURE_NAME_TO_DETAILS = {
-    "javacard-memory.cap": {
-        "name": "",
-        "description": "This is used to estimate memory usage on your smart card.",  # text or markdown file
-    }
-}
 
 UNSUPPORTED_APPS = ["FIDO2.cap", "Satodime.cap", "keycard.cap"]
 
@@ -74,7 +68,7 @@ def fetch_flexsecure_releases() -> list:
 
 
 def fetch_flexsecure_release(
-    version=None, verbose=False
+    release=None, verbose=False
 ) -> dict[str, str] or dict[str]:
     """
     Fetch a release from GitHub for the 'DangerousThings/flexsecure-applets' repo.
@@ -86,10 +80,10 @@ def fetch_flexsecure_release(
     Returns:
         dict[str, str]: A dictionary with the asset name as the key and download URL as the value.
     """
-    if version:
+    if release:
         # If a specific version is requested, fetch that release by tag name
         url = (
-            f"https://api.github.com/repos/{OWNER}/{REPO_NAME}/releases/tags/{version}"
+            f"https://api.github.com/repos/{OWNER}/{REPO_NAME}/releases/tags/{release}"
         )
     else:
         # If no version is specified, fetch the latest release
@@ -113,7 +107,7 @@ def fetch_flexsecure_release(
                     results[name] = dl_url
 
         if verbose:
-            return {"apps": results, "version": data["tag_name"]}
+            return {"apps": results, "release": data["tag_name"]}
 
         return results
 
@@ -127,6 +121,8 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
     The single plugin for the entire 'flexsecure_applets' repository.
     """
 
+    release = None
+
     def __init__(self):
         super().__init__()
         self._selected_cap = None
@@ -137,8 +133,12 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
     def name(self) -> str:
         return "flexsecure_applets"
 
-    def fetch_available_caps(self, version=None) -> dict[str, str]:
-        return fetch_flexsecure_release(version=version)
+    def fetch_available_caps(self, release=None) -> dict[str, str]:
+        res = fetch_flexsecure_release(release=release)
+
+        self.release = res["release"]
+
+        return res
 
     def set_cap_name(self, cap_name: str):
         """
@@ -189,3 +189,44 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
         if self._override_instance:
             return self._override_instance.get_result()
         return {}
+
+    def get_descriptions(self):
+        return {
+            "javacard-memory.cap": f"""
+                # Free Memory
+                This is used to determine memory usage on your smart card.
+                <br />
+                
+                - **Release**: {self.release}
+            """,
+            "keycard.cap": f"""
+                # Status.IM Key Card
+                This is three different applets in one cap file. Among them is a cold wallet.
+                <br />
+                
+                - **Release**: {self.release}
+            """,  # TODO: Add support for selecting apps in multi-app cap
+            "openjavacard-ndef-full.cap": f"""
+                # NDEF Container
+                This applet allows up to a 32kB NDEF container to be made on your smart card.
+                    These containers allow you to share data such as links.
+                <br />
+                
+                - **Release**: {self.release}
+            """,
+            "SatoChip.cap": f"""
+                # SatoChip
+                This is a crypto cold wallet from SatoChip.io.
+                <br />
+                
+                - **Release**: {self.release}
+            """,
+            "Satodime.cap": "",  # This doesn't work with DT/VK products
+            "SeedKeeper.cap": "",
+            "SmartPGPApplet-default.cap": "",
+            "SmartPGPApplet-large.cap": "",  # Use this for disgustingly large RSA keys. Consider ECC instead. Seriously.
+            "U2FApplet.cap": "",
+            "FIDO2.cap": "",
+            "vivokey-otp.cap": "",
+            "YkHMACApplet.cap": "",
+        }
