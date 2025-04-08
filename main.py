@@ -204,8 +204,10 @@ class GPManagerApp(QWidget):
         #
         self.available_apps_info = {}
         self.app_descriptions = {}
+        self.storage = {}
         for plugin_name, plugin_cls in self.plugin_map.items():
             plugin_instance = plugin_cls()
+            plugin_instance.load_storage()
             if (
                 not self.config["last_checked"].get(plugin_name, False)
                 or self.config["last_checked"][plugin_name]["last"]
@@ -247,6 +249,8 @@ class GPManagerApp(QWidget):
 
             for cap_n, description_md in descriptions.items():
                 self.app_descriptions[cap_n] = description_md
+
+            self.storage = self.storage | plugin_instance.storage
 
         #
         # 3) Populate the "Available Apps" list from self.available_apps_info,
@@ -355,6 +359,7 @@ class GPManagerApp(QWidget):
         for plugin_name, plugin_cls in self.plugin_map.items():
             plugin_instance = plugin_cls()
             caps = plugin_instance.fetch_available_caps()
+            plugin_instance.load_storage()
 
             if len(caps.keys()) > 0:
                 updated = True
@@ -526,17 +531,42 @@ class GPManagerApp(QWidget):
     #  Install Flow
     #
     def install_app(self):
+        selected = self.available_list.selectedItems()
+        if not selected:
+            return
+
+        cap_name = selected[0].text()
+
+        # TODO: better mutual exclusivity testing. Without this, trying to install U2F
+        #   with FIDO2 installed will result in an error and this app trying to do cleanup
+        #   from the b0rked install. This will remove the FIDO2 app--and all keys.
+        if "U2F" in cap_name and "FIDO2.cap" in self.installed_app_names:
+            self.show_error_dialog("FIDO2 falls back to U2F--you do not need both.")
+            return
+
+        # Do we have enough storage?
+        reqs = self.storage.get(cap_name)
+        if (
+            reqs is not None
+            and self.nfc_thread.storage["persistent"] != "-1"
+            and self.nfc_thread.storage["transient"] != -1
+        ):  # None means we don't have any data for the app
+            error_message = "Insufficient Storage\n"
+            default_length = len(error_message)
+            if self.nfc_thread.storage["persistent"] < reqs["persistent"]:
+                error_message += f"\tPersistent Needed: {abs(self.nfc_thread.storage["persistent"] - reqs["persistent"])} bytes"
+            if self.nfc_thread.storage["transient"] < reqs["transient"]:
+                error_message += f"\tTransient Needed: {abs(self.nfc_thread.storage["transient"] - reqs["transient"])} bytes"
+            if len(error_message) > default_length:
+                self.show_error_dialog(error_message)
+                return
+
         # Is the details pane open?
         if (
             not self.apps_grid_layout.itemAtPosition(1, 1).widget()
             == self.installed_list
         ):
             self.handle_details_pane_back()  # close it if so
-
-        selected = self.available_list.selectedItems()
-        if not selected:
-            return
-        cap_name = selected[0].text()
 
         # See which plugin is responsible for this .cap
         if cap_name not in self.available_apps_info:

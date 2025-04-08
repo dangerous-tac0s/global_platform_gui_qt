@@ -1,14 +1,18 @@
 # base_plugin.py
-
+import json
 import os
 import importlib
 from abc import ABC, abstractmethod
+
+from nfc_thread import resource_path
+
 
 # override_map = {}
 
 
 class BaseAppletPlugin(ABC):
     release: str | None = None
+    storage: dict[str, dict[str, int]] = {}
     """
     Abstract base for each dynamic applet plugin.
     """
@@ -66,7 +70,20 @@ class BaseAppletPlugin(ABC):
                 try:
                     importlib.import_module(full_mod_path)
                 except Exception as e:
+
                     print(f"Error importing {full_mod_path}: {e}")
+
+    def load_storage(self):
+        if self.release is not None and os.path.exists(
+            resource_path(f"repos/{self.name}/applet_storage_by_release.json")
+        ):
+            with open(
+                resource_path(f"repos/{self.name}/applet_storage_by_release.json"),
+                "r",
+            ) as fh:
+                storage = json.load(fh)
+                fh.close()
+            self.storage = storage[self.release]
 
     def set_cap_name(self, cap_name: str, override_map=None):
         """
@@ -85,6 +102,10 @@ class BaseAppletPlugin(ABC):
 
     def set_release(self, release: str):
         self.release = release
+        if self.release.startswith("v"):
+            self.release = self.release[1:]
+
+        self.load_storage()
 
     def get_descriptions(self) -> dict[str, str]:
         pass
@@ -93,8 +114,11 @@ class BaseAppletPlugin(ABC):
         if self.release is None:
             return
 
-        return f"""
+        if self.storage.get(cap_filename) is not None:
+
+            return f"""
                 ### Storage Required (in bytes)
-                - **Persistent**: {storage_json[self.release][cap_filename]["persistent"]:,}
-                - **Transient**: {storage_json[self.release][cap_filename]["transient"]:,}
-        """
+                - **Persistent**: {storage_json[cap_filename]["persistent"]:,}
+                - **Transient**: {storage_json[cap_filename]["transient"]:,}
+                   """
+        return ""

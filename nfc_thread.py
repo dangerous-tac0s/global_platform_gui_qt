@@ -69,6 +69,7 @@ class NFCHandlerThread(QThread):
         self.card_detected = False
         self.valid_card_detected = False
         self.current_uid = None
+        self.storage: dict[str, int] = {"persistent": -1, "transient": -1}
 
         # OS-specific gp command
         self.gp = {
@@ -101,6 +102,8 @@ class NFCHandlerThread(QThread):
                         self.card_detected = False
                         self.valid_card_detected = False
                         self.current_uid = None
+                        self.storage["persistent"] = -1
+                        self.storage["transient"] = -1
                         self.card_present_signal.emit(False)
                     self.status_update_signal.emit("No readers found.")
                     self.msleep(timeout_duration)
@@ -118,9 +121,15 @@ class NFCHandlerThread(QThread):
                             self.current_uid = uid
                             self.card_present_signal.emit(True)
                             if jcop3:
-                                mem = self.get_memory_status()
+                                mem = get_memory()
+                                self.storage["persistent"] = mem["persistent"]["free"]
+                                self.storage["transient"] = (
+                                    mem["transient"]["reset_free"]
+                                    + mem["transient"]["deselect_free"]
+                                )
+                                formatted_mem = self.get_memory_status(mem)
                                 self.title_bar_signal.emit(
-                                    f"UID: {self.current_uid} > {mem}"
+                                    f"UID: {self.current_uid} > {formatted_mem}"
                                 )
 
                                 self.get_key_signal.emit(self.current_uid)
@@ -134,6 +143,8 @@ class NFCHandlerThread(QThread):
                             self.card_detected = False
                             self.valid_card_detected = False
                             self.current_uid = None
+                            self.storage["persistent"] = -1
+                            self.storage["transient"] = -1
                             self.card_present_signal.emit(False)
                             self.status_update_signal.emit("No card present.")
                 else:
@@ -141,6 +152,8 @@ class NFCHandlerThread(QThread):
                         self.card_detected = False
                         self.valid_card_detected = False
                         self.current_uid = None
+                        self.storage["persistent"] = -1
+                        self.storage["transient"] = -1
                         self.card_present_signal.emit(False)
                         self.status_update_signal.emit("No card present.")
 
@@ -201,10 +214,9 @@ class NFCHandlerThread(QThread):
         except Exception as e:
             return False
 
-    def get_memory_status(self):
+    def get_memory_status(self, memory):
         """Call measure.get_memory()."""
         try:
-            memory = get_memory()
             if memory and memory != -1:
                 free = memory["persistent"]["free"] / 1024
                 percent = memory["persistent"]["percent_free"] * 100
@@ -395,8 +407,13 @@ class NFCHandlerThread(QThread):
                 and not self.app.config["cache_latest_release"]
             ):
                 os.remove(cap_file_path)
-            mem = self.get_memory_status()
-            self.title_bar_signal.emit(f"UID: {self.current_uid} > {mem}")
+            mem = get_memory()
+            self.storage["persistent"] = mem["persistent"]["free"]
+            self.storage["transient"] = (
+                mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
+            )
+            formatted_mem = self.get_memory_status(mem)
+            self.title_bar_signal.emit(f"UID: {self.current_uid} > {formatted_mem}")
 
     def uninstall_app(self, aid, force=False):
         """
@@ -452,8 +469,13 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, err_msg)
             self.error_signal.emit(err_msg)
         finally:
-            mem = self.get_memory_status()
-            self.title_bar_signal.emit(f"UID: {self.current_uid} > {mem}")
+            mem = get_memory()
+            self.storage["persistent"] = mem["persistent"]["free"]
+            self.storage["transient"] = (
+                mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
+            )
+            formatted_mem = self.get_memory_status(mem)
+            self.title_bar_signal.emit(f"UID: {self.current_uid} > {formatted_mem}")
 
     def uninstall_app_by_cap(self, cap_file_path, fallback_aid=None, force=False):
         """
@@ -509,8 +531,13 @@ class NFCHandlerThread(QThread):
             # TODO: Support caching
             if os.path.exists(cap_file_path):
                 os.remove(cap_file_path)
-            mem = self.get_memory_status()
-            self.title_bar_signal.emit(f"UID: {self.current_uid} > {mem}")
+            mem = get_memory()
+            self.storage["persistent"] = mem["persistent"]["free"]
+            self.storage["transient"] = (
+                mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
+            )
+            formatted_mem = self.get_memory_status(mem)
+            self.title_bar_signal.emit(f"UID: {self.current_uid} > {formatted_mem}")
 
     def get_key(self):
         self.get_key_signal.emit()

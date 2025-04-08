@@ -43,8 +43,8 @@ Features:
 - App Detail Pane
   - [x] Description
   - [ ] Version
-  - [ ] Release it's from
-  - [ ] Storage Requirements
+  - [x] Release it's from
+  - [x] Storage Requirements
 - Better NDEF support
   - [ ] Support encrypted records like @hoker's Apex Manager?
   - [ ] Support writing of NDEF records to NTAGs, DESFire, etc?

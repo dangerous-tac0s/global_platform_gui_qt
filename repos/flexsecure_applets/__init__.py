@@ -1,5 +1,6 @@
 # /repos/flexsecure_applets/__init__.py
 import json
+import os.path
 
 import requests
 
@@ -22,7 +23,7 @@ FLEXSECURE_AID_MAP = {
     "SmartPGPApplet-default.cap": "D276000124010304000A000000000000",
     "SmartPGPApplet-large.cap": "D276000124010304000A000000000000",  # Use this for disgustingly large RSA keys. Consider ECC instead. Seriously.
     "U2FApplet.cap": "A0000006472F0002",
-    "FIDO2.cap": "A0000006472F0001",
+    "FIDO2.cap": "A0000006472F000101",
     "vivokey-otp.cap": "A0000005272101014150455801",
     "YkHMACApplet.cap": "A000000527200101",
 }
@@ -139,6 +140,10 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
         res = fetch_flexsecure_release(release=release, verbose=True)
 
         self.release = res["release"]
+        if self.release.startswith("v"):
+            self.release = self.release[1:]
+
+        self.load_storage()
 
         return res["apps"]
 
@@ -193,12 +198,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
         return {}
 
     def get_descriptions(self):
-        with open(
-            resource_path("repos/flexsecure_applets/applet_storage_by_release.json"),
-            "r",
-        ) as fh:
-            storage = json.load(fh)
-            fh.close()
+        storage = self.storage
 
         return {
             "javacard-memory.cap": f"""

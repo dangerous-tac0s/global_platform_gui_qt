@@ -1,5 +1,5 @@
 {
-    "v0.19.1": {
+    "0.19.1": {
         "vivokey-otp.cap": {
             "persistent": 5264,
             "transient": 2344
@@ -45,7 +45,7 @@
             "transient": 1365
         }
     },
-    "v0.19.0": {
+    "0.19.0": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -91,7 +91,7 @@
             "transient": 1365
         }
     },
-    "v0.18.9": {
+    "0.18.9": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -137,7 +137,7 @@
             "transient": 1365
         }
     },
-    "v0.18.8": {
+    "0.18.8": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -183,7 +183,7 @@
             "transient": 1365
         }
     },
-    "v0.18.7": {
+    "0.18.7": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -229,7 +229,7 @@
             "transient": 1365
         }
     },
-    "v0.18.6": {
+    "0.18.6": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -275,7 +275,7 @@
             "transient": 1365
         }
     },
-    "v0.18.5": {
+    "0.18.5": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -321,7 +321,7 @@
             "transient": 1365
         }
     },
-    "v0.18.4": {
+    "0.18.4": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -367,7 +367,7 @@
             "transient": 1365
         }
     },
-    "v0.18.3": {
+    "0.18.3": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -413,7 +413,7 @@
             "transient": 1365
         }
     },
-    "v0.18.2": {
+    "0.18.2": {
         "vivokey-otp.cap": {
             "persistent": 5416,
             "transient": 2344
@@ -459,7 +459,7 @@
             "transient": 1365
         }
     },
-    "v0.17": {
+    "0.17": {
         "vivokey-otp.cap": {
             "persistent": 5284,
             "transient": 2344
@@ -505,7 +505,7 @@
             "transient": 1365
         }
     },
-    "v0.16.4": {
+    "0.16.4": {
         "vivokey-otp.cap": {
             "persistent": 5284,
             "transient": 2344
@@ -543,7 +543,7 @@
             "transient": 800
         }
     },
-    "v0.16.3": {
+    "0.16.3": {
         "vivokey-otp.cap": {
             "persistent": 5276,
             "transient": 2344
@@ -581,7 +581,7 @@
             "transient": 800
         }
     },
-    "v0.16.2": {
+    "0.16.2": {
         "vivokey-otp.cap": {
             "persistent": 5280,
             "transient": 2344
@@ -619,7 +619,7 @@
             "transient": 800
         }
     },
-    "v0.16.1": {
+    "0.16.1": {
         "vivokey-otp.cap": {
             "persistent": 5280,
             "transient": 2344
@@ -657,7 +657,7 @@
             "transient": 800
         }
     },
-    "v0.16": {
+    "0.16": {
         "vivokey-otp.cap": {
             "persistent": 5268,
             "transient": 2344
@@ -695,7 +695,7 @@
             "transient": 800
         }
     },
-    "v0.15.2": {
+    "0.15.2": {
         "vivokey-otp.cap": {
             "persistent": 5268,
             "transient": 2344
@@ -733,7 +733,7 @@
             "transient": 800
         }
     },
-    "v0.15.1": {
+    "0.15.1": {
         "vivokey-otp.cap": {
             "persistent": 5280,
             "transient": 2344
@@ -771,7 +771,7 @@
             "transient": 800
         }
     },
-    "v0.14.0": {
+    "0.14.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -809,7 +809,7 @@
             "transient": 800
         }
     },
-    "v0.13.0": {
+    "0.13.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -847,7 +847,7 @@
             "transient": 800
         }
     },
-    "v0.12.0": {
+    "0.12.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -885,7 +885,7 @@
             "transient": 800
         }
     },
-    "v0.11.0": {
+    "0.11.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -923,7 +923,7 @@
             "transient": 800
         }
     },
-    "v0.10.0": {
+    "0.10.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -961,7 +961,7 @@
             "transient": 800
         }
     },
-    "v0.9.0": {
+    "0.9.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -991,7 +991,7 @@
             "transient": 2102
         }
     },
-    "v0.8.0": {
+    "0.8.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -1021,7 +1021,7 @@
             "transient": 2102
         }
     },
-    "v0.7.0": {
+    "0.7.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -1051,7 +1051,7 @@
             "transient": 2102
         }
     },
-    "v0.6.0": {
+    "0.6.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -1081,7 +1081,7 @@
             "transient": 2102
         }
     },
-    "v0.5.0": {
+    "0.5.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -1111,7 +1111,7 @@
             "transient": 2102
         }
     },
-    "v0.4.0": {
+    "0.4.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
@@ -1141,7 +1141,7 @@
             "transient": 2102
         }
     },
-    "v0.3.0": {
+    "0.3.0": {
         "vivokey-otp.cap": {
             "persistent": 5128,
             "transient": 2344
