@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 
 
 class BaseAppletPlugin(ABC):
-    release: str
+    release: str | None = None
     """
     Abstract base for each dynamic applet plugin.
     """
@@ -88,3 +88,13 @@ class BaseAppletPlugin(ABC):
 
     def get_descriptions(self) -> dict[str, str]:
         pass
+
+    def render_storage_req(self, storage_json: dict, cap_filename: str):
+        if self.release is None:
+            return
+
+        return f"""
+                ### Storage Required (in bytes)
+                - **Persistent**: {storage_json[self.release][cap_filename]["persistent"]:,}
+                - **Transient**: {storage_json[self.release][cap_filename]["transient"]:,}
+        """

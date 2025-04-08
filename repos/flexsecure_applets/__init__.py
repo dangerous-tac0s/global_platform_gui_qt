@@ -4,6 +4,7 @@ import json
 import requests
 
 from base_plugin import BaseAppletPlugin
+from nfc_thread import resource_path
 
 """
 flexsecure_applets plugin: Manages all .cap files and their associated AIDs for the
@@ -192,7 +193,10 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
         return {}
 
     def get_descriptions(self):
-        with open("repos/flexsecure_applets/applet_storage_by_release.json", "r") as fh:
+        with open(
+            resource_path("repos/flexsecure_applets/applet_storage_by_release.json"),
+            "r",
+        ) as fh:
             storage = json.load(fh)
             fh.close()
 
@@ -217,9 +221,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/OpenJavaCard/openjavacard-ndef">NDEF Container</a>
                 ### By: <a href="https://github.com/OpenJavaCard">OpenJavaCard</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["openjavacard-ndef-full.cap"]["persistent"]:,} + Container Size
-                - **Transient**: {storage[self.release]["openjavacard-ndef-full.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "openjavacard-ndef-full.cap")}
                 
                 This allows your smartcard to share data such as links.
 
@@ -231,9 +233,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/Toporin/SatochipApplet">SatoChip</a>
                 ### By <a href="https://satochip.io/">SatoChip.io</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["SatoChip.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["SatoChip.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "SatoChip.cap")}
                 
                 ### Introduction
 
@@ -271,6 +271,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
             "Satodime.cap": f"""
                 ## <a href="https://github.com/Toporin/Satodime-Applet">Satodime</a>
                 ### By <a href="https://satochip.io/">SatoChip.io</a>
+                {self.render_storage_req(storage, "Satodime.cap")}
                 
                 It is not compatible with Apex or flexSecure.Open source javacard applet implementing a bearer crypto card. The bearer chip card that allows you to spend crypto assets like a banknote. Safely pass it along multiple times,  unseal anytime with ease, thanks to cryptography. Trustless, easy to verify and completly secure.
 
@@ -294,9 +295,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/Toporin/Seedkeeper-Applet">SeedKeeper</a>
                 ### By <a href="https://satochip.io/">SatoChip.io</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["SeedKeeper.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["SeedKeeper.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "SeedKeeper.cap")}
                 
                 ### Introduction
 
@@ -316,9 +315,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/github-af/SmartPGP">SmartPGP</a>
                 ### By: <a href="https://github.com/github-af">github-af</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["SmartPGPApplet-default.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["SmartPGPApplet-default.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "SmartPGPApplet-default.cap")}
                 
                 Bring PGP/GPG operations such as encryption and signing to your smart card.
                 
@@ -327,9 +324,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/github-af/SmartPGP">SmartPGP - Large</a>
                 ### By: <a href="https://github.com/github-af">github-af</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["SmartPGPApplet-large.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["SmartPGPApplet-large.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "SmartPGPApplet-large.cap")}
                 
                 Bring PGP/GPG operations such as encryption and signing to your smart card.
                 <br />
@@ -342,9 +337,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/darconeous/u2f-javacard">U2F Authenticator</a>
                 ### By: <a href="https://github.com/darconeous">darconeous</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["U2FApplet.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["U2FApplet.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "U2FApplet.cap")}
                 
                 This is a fork of the [Ledger U2F Applet](https://github.com/LedgerHQ/ledger-u2f-javacard) that is focused on privacy and compatability. It has several unique features:
 
@@ -376,9 +369,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/BryanJacobs/FIDO2Applet">FIDO 2</a>
                 ### By: <a href="https://github.com/BryanJacobs">Bryan Jacobs</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["FIDO2.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["FIDO2.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "FIDO2.cap")}
                 
                 ### Overview
 
@@ -408,9 +399,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/VivoKey/apex-totp">TOTP/HOTP Authenticator</a>
                 ### By: <a href="https://github.com/stargate01">StarGate01</a> from <a href="https://vivokey.com">VivoKey</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["vivokey-otp.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["vivokey-otp.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "vivokey-otp.cap")}
                 
                 This allows you to generate TOTP codes on your smart card.
             """,
@@ -418,9 +407,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
                 ## <a href="https://github.com/DangerousThings/flexsecure-ykhmac">HMAC-SHA1 Challenge-Response</a>
                 ### By: <a href="https://github.com/stargate01">StarGate01</a> from <a href="https://vivokey.com">VivoKey</a>
                 ### Release: {self.release}
-                ### Storage Required (in bytes)
-                - **Persistent**: {storage[self.release]["YkHMACApplet.cap"]["persistent"]:,}
-                - **Transient**: {storage[self.release]["YkHMACApplet.cap"]["transient"]:,}
+                {self.render_storage_req(storage, "YkHMACApplet.cap")}
                                 
                 This is a JavaCard applet that emulates the HMAC challenge-response functionality of the Yubikey NEO/4/5. It presents the same interface that a real Yubikey presents over CCID (i.e. this applet does not have any HID features).
                 <br /><br />

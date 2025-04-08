@@ -224,9 +224,11 @@ class GPManagerApp(QWidget):
                     )
             else:
                 caps = self.config["last_checked"][plugin_name]["apps"]
-                plugin_instance.set_release(
-                    self.config["last_checked"][plugin_name]["release"]
-                )
+
+                if self.config["last_checked"][plugin_name].get("release", False):
+                    plugin_instance.set_release(
+                        self.config["last_checked"][plugin_name]["release"]
+                    )
 
                 if len(caps.keys()) == 0:  # Probably a failure in fetching.
                     caps = plugin_instance.fetch_available_caps()

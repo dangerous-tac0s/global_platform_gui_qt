@@ -530,14 +530,6 @@ class NFCHandlerThread(QThread):
         self.running = False
 
 
-def resource_path(relative_path):
-    """Get absolute path to resource, works for dev and for PyInstaller"""
-    if hasattr(sys, "_MEIPASS"):
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
-
-
 def detect_encoding(file_path):
     """
     Detect the file encoding using chardet.
@@ -668,3 +660,11 @@ def get_selected_manifest(manifest_dict):
         "app_version": manifest_dict.get("Java-Card-Package-Version", None),
         "jcop_version": manifest_dict.get("Runtime-Descriptor-Version", None),
     }
+
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    if hasattr(sys, "_MEIPASS"):
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
