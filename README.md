@@ -35,20 +35,25 @@ Features:
 <img src="screenshot_ndef.png" width=350/>
 
 ## Known Issues
-- Reader selection hasn't been tested
-- Sometimes throws an error if a card is present on app start
 - No real validation URI record creation
 
 ## Forthcoming
-- Support for changing your key
-- Secure storage for keys and the like
-- ~~App details/description~~/storage requirements
+- [ ] Support for changing your key
+- [ ] Secure storage for keys and the like
+- App Detail Pane
+  - [x] Description
+  - [ ] Version
+  - [ ] Release it's from
+  - [ ] Storage Requirements
 - Better NDEF support
-  - Support encrypted records like @hoker's Apex Manager?
-  - Support writing of NDEF records to NTAGs, DESFire, etc?
-- Version reporting
-- cap file caching
-- 'Plugins' that don't require rebuilding if you're using a binary
+  - [ ] Support encrypted records like @hoker's Apex Manager?
+  - [ ] Support writing of NDEF records to NTAGs, DESFire, etc?
+  - [ ] Multiple records
+  - [ ] Mime Records
+- [ ] Status.im support
+- [ ] cap file caching
+- [ ] 'Plugins' that don't require rebuilding if you're using a binary
+- [ ] Exporting/backing up of app config, secure storage, and key if applicable
 
 ## Quick Start
 
