@@ -8,7 +8,7 @@ import textwrap
 import time
 
 import markdown
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtGui import QIcon, QFont, QMouseEvent
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -297,6 +297,8 @@ class GPManagerApp(QWidget):
         """
         Swaps installed/available columns for details pane
         """
+        if changed_list is None:
+            return
         selected_app = changed_list.text()
 
         if self.app_descriptions.get(selected_app) is None:
@@ -306,6 +308,7 @@ class GPManagerApp(QWidget):
         is_showing_details = False
 
         viewer = QTextBrowser()
+        viewer.setOpenExternalLinks(True)
         viewer.setHtml(
             markdown.markdown(textwrap.dedent(self.app_descriptions[selected_app]))
         )
@@ -340,19 +343,6 @@ class GPManagerApp(QWidget):
                 self.apps_grid_layout.itemAtPosition(0, 0).widget()
             )
             self.apps_grid_layout.addWidget(viewer, 0, 0, 2, 1)
-
-        print(selected_app)
-        print(f"showing details: {is_showing_details}")
-
-        """
-        TODO: DETAILS PANE
-        - should render markdown
-        - button at bottom is labeled "back" and negates selection
-            and re-shows the hidden list
-        """
-        # frame = QFrame()
-        # back_button = QPushButton("Back")
-        # frame.addWidget(back_button)
 
     def update_plugin_releases(self):
         self.message_queue.add_message("Fetching latest plugin releases...")
@@ -408,6 +398,7 @@ class GPManagerApp(QWidget):
         """
         Force checking plugin resources for updates
         """
+        self.message_queue.add_message("Fetching latest releases...")
         self.update_plugin_releases()
 
     def populate_available_list(self):
@@ -527,6 +518,13 @@ class GPManagerApp(QWidget):
     #  Install Flow
     #
     def install_app(self):
+        # Is the details pane open?
+        if (
+            not self.apps_grid_layout.itemAtPosition(1, 1).widget()
+            == self.installed_list
+        ):
+            self.handle_details_pane_back()  # close it if so
+
         selected = self.available_list.selectedItems()
         if not selected:
             return
@@ -825,7 +823,6 @@ class GPManagerApp(QWidget):
         - The bool indicates whether it has a default key
         Returns None when the tag is not known
         """
-        print(f"query: {self.config["known_tags"].get(uid)}")
         default_key = self.config["known_tags"].get(uid, False)
         return default_key
 

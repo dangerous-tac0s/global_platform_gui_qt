@@ -67,11 +67,14 @@ class BaseAppletPlugin(ABC):
                 except Exception as e:
                     print(f"Error importing {full_mod_path}: {e}")
 
-    def set_cap_name(self, cap_name: str, override_map):
+    def set_cap_name(self, cap_name: str, override_map=None):
         """
         Called by main.py when user picks a .cap to install/uninstall.
         If there's a sub-file override for that .cap, we instantiate it.
         """
+        if override_map is None:
+            override_map = {}
+
         self._selected_cap = cap_name
         if cap_name in override_map:
             override_cls = override_map[cap_name]

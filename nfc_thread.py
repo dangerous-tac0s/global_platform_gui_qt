@@ -331,9 +331,14 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, "No reader selected.")
             return
 
-        if self.key is None or self.app.config["known_tags"].get(
-            self.current_uid, None
-        ):
+        tag_known = self.app.config["known_tags"].get(self.current_uid)
+        if self.key is None or not tag_known:
+            if self.key is None:
+                self.error_signal("Key is not set!")
+            if tag_known is False:
+                self.error_signal("Key is non-default")
+            if tag_known is None:
+                self.error_signal("Tag is not known")
             return  # Protect unknown tags
 
         try:
