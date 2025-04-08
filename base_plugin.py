@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 
 
 class BaseAppletPlugin(ABC):
+    release: str
     """
     Abstract base for each dynamic applet plugin.
     """
@@ -81,6 +82,9 @@ class BaseAppletPlugin(ABC):
             self._override_instance = override_cls()
         else:
             self._override_instance = None
+
+    def set_release(self, release: str):
+        self.release = release
 
     def get_descriptions(self) -> dict[str, str]:
         pass

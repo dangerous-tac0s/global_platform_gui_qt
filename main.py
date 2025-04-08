@@ -224,6 +224,9 @@ class GPManagerApp(QWidget):
                     )
             else:
                 caps = self.config["last_checked"][plugin_name]["apps"]
+                plugin_instance.set_release(
+                    self.config["last_checked"][plugin_name]["release"]
+                )
 
                 if len(caps.keys()) == 0:  # Probably a failure in fetching.
                     caps = plugin_instance.fetch_available_caps()
@@ -356,6 +359,9 @@ class GPManagerApp(QWidget):
                 self.config["last_checked"][plugin_name] = {}
                 self.config["last_checked"][plugin_name]["apps"] = caps
                 self.config["last_checked"][plugin_name]["last"] = time.time()
+                self.config["last_checked"][plugin_name]["release"] = list(
+                    caps.values()
+                )[0].split("/")[-2]
 
                 self.write_config()
 
@@ -366,7 +372,7 @@ class GPManagerApp(QWidget):
                 # Update descriptions
                 descriptions = plugin_instance.get_descriptions()
 
-                for cap_n, description_md in descriptions:
+                for cap_n, description_md in descriptions.items():
                     self.app_descriptions[cap_n] = description_md
 
             else:
@@ -391,14 +397,14 @@ class GPManagerApp(QWidget):
         """
         TODO: HELP! I NEED SOMEBODY! HELP! NOT JUST ANYBODY!
         """
-        print("F1")
+        print("HELP! I NEED SOMEBODY!\nHELP! NOT JUST ANYBODY!")
         pass
 
     def on_f4_pressed(self, event):
         """
         Force checking plugin resources for updates
         """
-        self.message_queue.add_message("Fetching latest releases...")
+        self.message_queue.add_message("Update forced...")
         self.update_plugin_releases()
 
     def populate_available_list(self):
