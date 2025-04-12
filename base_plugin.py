@@ -83,7 +83,7 @@ class BaseAppletPlugin(ABC):
             ) as fh:
                 storage = json.load(fh)
                 fh.close()
-            self.storage = storage[self.release]
+            self.storage = storage[self.release.replace("v", "")]
 
     def set_cap_name(self, cap_name: str, override_map=None):
         """

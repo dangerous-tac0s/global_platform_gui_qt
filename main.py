@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QTimer, Qt, QSize
 
+from dialogs.hex_input_dialog import HexInputDialog
 from file_thread import FileHandlerThread
 from nfc_thread import NFCHandlerThread, resource_path, DEFAULT_KEY
 from secure_storage import SecureStorage
@@ -218,8 +219,8 @@ class GPManagerApp(QMainWindow):
         set_tag_key_action = QAction("Set Key", self)
         set_tag_key_action.triggered.connect(self.set_tag_key)
         change_tag_key_action = QAction("⚠️ Change Key ⚠️", self)
-        change_tag_key_action.triggered.connect(self.set_tag_key)
-        change_tag_key_action.setEnabled(False)
+        change_tag_key_action.triggered.connect(self.change_tag_key)
+        # change_tag_key_action.setEnabled(False)
 
         tag_menu.addAction(set_tag_name_action)
         tag_menu.addAction(set_tag_key_action)
@@ -524,6 +525,12 @@ class GPManagerApp(QMainWindow):
         Force checking plugin resources for updates
         """
         self.message_queue.add_message("Update forced...")
+        if self.nfc_thread.current_uid:
+            self.message_queue.add_message("Forcing update on present tag...")
+            self.nfc_thread.current_uid = None
+            self.nfc_thread.key = None
+            self.nfc_thread.card_detected = False
+            self.update_title_bar(self.nfc_thread.make_title_bar_string())
         self.update_plugin_releases()
 
     def populate_available_list(self):
@@ -885,8 +892,13 @@ class GPManagerApp(QMainWindow):
     #  Utility
     #
     def closeEvent(self, event):
+        self.write_config()
+        if self.secure_storage:
+            self.write_secure_storage()
+
         self.nfc_thread.stop()
         self.nfc_thread.wait()
+
         event.accept()
 
     def show_error_dialog(self, message: str):
@@ -944,24 +956,36 @@ class GPManagerApp(QMainWindow):
         Prompts the user to enter their smart card's key
         """
         is_new = self.config["known_tags"].get(uid, False) != False
-        dialog = KeyDialog(
-            uid=uid,
-            exiting_key=existing_key,
-            is_new=is_new,
-        )  # No existing key
+        title = ""
+        if is_new:
+            title = "New Tag: "
+        if not existing_key:
+            existing_key = DEFAULT_KEY
+        title += "Enter Hexadecimal Key"
+        dialog = HexInputDialog(
+            title=title,
+            fixed_byte_counts=[16, 24, 2],
+            parent=self,
+            initial_value=existing_key,
+        )
+        # dialog = KeyDialog(
+        #     uid=uid,
+        #     exiting_key=existing_key,
+        #     is_new=is_new,
+        # )  # No existing key
         if dialog.exec_():  # Show dialog and wait for user action
             res = dialog.get_results()
 
-            if not self.config["known_tags"].get(res["uid"]):
-                self.config["known_tags"][uid] = False
-            self.update_known_tags(uid, res["key"] == DEFAULT_KEY)
+            # if not self.config["known_tags"].get(res["uid"]):
+            #     self.config["known_tags"][uid] = False
+            self.update_known_tags(uid, res)
 
-            if self.secure_storage is not None:
-                if not self.secure_storage["tags"].get(uid):
-                    self.secure_storage["tags"][uid] = {"name": uid, "key": res["key"]}
-                else:
-                    self.secure_storage["tags"][uid]["key"] = res["key"]
-                self.write_secure_storage()
+            # if self.secure_storage is not None:
+            #     if not self.secure_storage["tags"].get(uid):
+            #         self.secure_storage["tags"][uid] = {"name": uid, "key": res["key"]}
+            #     else:
+            #         self.secure_storage["tags"][uid]["key"] = res["key"]
+            #     self.write_secure_storage()
 
             return res
 
@@ -1021,18 +1045,22 @@ class GPManagerApp(QMainWindow):
                 f"{self.secure_storage["tags"][uid]["name"]}'s saved key is now: {tag_key}",
             )
 
-    def quit_app(self):
-        # Handle quitting the application
-        reply = QMessageBox.question(
-            self,
-            "Quit",
-            "Are you sure you want to quit?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+    def change_tag_key(self):
+        dialog = HexInputDialog(
+            title="☠️ Change Your Key ☠️",
+            initial_value=self.nfc_thread.key,
+            fixed_byte_counts=[16, 24],
+            parent=self,
         )
-        if reply == QMessageBox.Yes:
+        dialog.exec_()
 
-            QApplication.instance().quit()
+        results = dialog.get_results()
+        if results:
+            self.nfc_thread.change_key(results)
+
+    def quit_app(self):
+
+        QApplication.instance().quit()
 
     def prompt_setup(self):
         def initialize_and_accept():
@@ -1120,37 +1148,64 @@ class GPManagerApp(QMainWindow):
             json.dump(self.config, fh, indent=4)
             fh.close()
 
-    def update_known_tags(self, uid: str, default_key: bool):
+    def update_known_tags(self, uid: str, default_key: bool | str):
         if self.config["known_tags"].get(uid) is None:
-            self.config["known_tags"][uid] = default_key
-            self.message_queue.add_message(
-                f"Added {uid} to known tags. Default key: {default_key}"
-            )
+            if type(default_key) != type(False):
+                self.config["known_tags"][uid] = default_key == DEFAULT_KEY
+            else:
+                self.config["known_tags"][uid] = default_key
+
+            if self.secure_storage:
+                if not self.secure_storage["tags"].get(uid):
+                    self.secure_storage["tags"][uid] = {"name": uid, "key": None}
+                if default_key == "False":
+                    self.secure_storage["tags"][uid]["key"] = None
+                else:
+                    self.secure_storage["tags"][uid]["key"] = default_key
+                self.write_secure_storage()
+                self.message_queue.add_message(
+                    f"Updated {self.secure_storage["tags"][uid]["name"]} to known tags. Default key: {default_key}"
+                )
+            else:
+                self.message_queue.add_message(
+                    f"Added {uid} to known tags. Default key: {default_key}"
+                )
         else:
+            if type(default_key) != type(False):
+                # Handle key storage in secure storage
+                if self.secure_storage and self.secure_storage["tags"].get(uid):
+                    if default_key == "False":
+                        self.secure_storage["tags"][uid]["key"] = None
+                    else:
+                        self.secure_storage["tags"][uid]["key"] = default_key
+
+                default_key = default_key == DEFAULT_KEY
             if self.config["known_tags"][uid] != default_key:
                 self.config["known_tags"][uid] = default_key
                 self.message_queue.add_message(
                     f"Updated {uid}. Default key: {default_key}"
                 )
 
-                # Handle out secure storage.
-                if self.secure_storage is not None:
-                    if self.secure_storage["tags"].get(uid):
-                        if not self.secure_storage["tags"].get(uid):
-                            self.secure_storage["tags"][uid] = {
-                                "name": uid,
-                                "key": None,
-                            }
-                        # This is designed to catch key rejections
-                        if (
-                            not default_key
-                            and self.secure_storage["tags"]["key"] == DEFAULT_KEY
-                        ):
-                            self.secure_storage["tags"][uid]["tags"] = None
-                        # elif default_key and self.secure_storage["tags"]["key"] != DEFAULT_KEY:
-                        #     self.secure_storage["tags"][uid]["key"] = DEFAULT_KEY
+                # # Handle out secure storage.
+                # if self.secure_storage is not None:
+                #     if self.secure_storage["tags"].get(uid):
+                #         if not self.secure_storage["tags"].get(uid):
+                #             self.secure_storage["tags"][uid] = {
+                #                 "name": uid,
+                #                 "key": None,
+                #             }
+                #         # This is designed to catch key rejections
+                #         if (
+                #             not default_key
+                #             and self.secure_storage["tags"]["key"] == DEFAULT_KEY
+                #         ):
+                #             self.secure_storage["tags"][uid]["tags"] = None
+                # elif default_key and self.secure_storage["tags"]["key"] != DEFAULT_KEY:
+                #     self.secure_storage["tags"][uid]["key"] = DEFAULT_KEY
 
         self.write_config()
+        if self.secure_storage:
+            self.write_secure_storage()
 
     def query_known_tags(self, uid: str) -> bool:
         """
