@@ -23,7 +23,9 @@ Looking for more information? Checkout the [flexSecure repo docs](https://github
 Rebooted from Tkinter to PyQt. Still early.
 
 Features:
-- Supports non-default keys
+- Supports non-default master keys
+- Supports changing master keys
+- Can store keys securely--or not
 - Decodes AIDs to names of flexSecure apps
 - Displays descriptions of apps (where provided)
 - Reports available memory (if app is installed)
@@ -49,7 +51,7 @@ Features:
 - No real validation URI record creation
 
 ## Forthcoming
-- [ ] Support for changing your key
+- [x] Support for changing master keys
 - [x] Secure storage for keys and the like
 - App Detail Pane
   - [x] Description
