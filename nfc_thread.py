@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import zipfile
 
 import chardet
@@ -58,6 +59,10 @@ class NFCHandlerThread(QThread):
         :param selected_reader_name: The currently chosen reader (or None at start).
         """
         super().__init__(parent)
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Start in "not paused" state
+        self._stop_event = threading.Event()
+
         self.app = app
         self.selected_reader_name = selected_reader_name
         self.key = None
@@ -88,7 +93,9 @@ class NFCHandlerThread(QThread):
         last_readers = []
         timeout_duration = 3000  # ms
 
-        while self.running:
+        while not self._stop_event.is_set():
+            self._pause_event.wait()  # Block here if paused
+
             try:
                 available_readers = readers()
                 reader_names = [str(r) for r in available_readers]
@@ -130,11 +137,11 @@ class NFCHandlerThread(QThread):
                                 self.title_bar_signal.emit(self.make_title_bar_string())
 
                                 self.get_key()
-
                             else:
                                 self.status_update_signal.emit(
                                     "Unsupported card detected."
                                 )
+
                     else:
                         if self.card_detected:
                             self.card_detected = False
@@ -251,7 +258,7 @@ class NFCHandlerThread(QThread):
         if self.storage["persistent"] != -1 and self.storage["transient"] != -1:
             return f"> Free Memory > Persistent: {self.storage["persistent"]:.0f}kB / Transient: {self.storage["transient"]:.1f}kB"
         else:
-            return "Javacard Memory not installed"
+            return "> Javacard Memory not installed"
 
     def run_gp(self, command: list[str], error_preface: str = "Error:"):
         if not self.key:
@@ -272,7 +279,9 @@ class NFCHandlerThread(QThread):
         if result.returncode == 0:
             return result.stdout.decode()
         else:
-            self.error_signal.emit(f"{error_preface} {result.stderr.decode()}")
+            self.error_signal.emit(f"{error_preface} {result.stderr.decode()[:60]}")
+            print(error_preface)
+            print(result.stderr.decode())
             return -1
 
     def get_installed_apps(self):
@@ -415,12 +424,7 @@ class NFCHandlerThread(QThread):
                 and not self.app.config["cache_latest_release"]
             ):
                 os.remove(cap_file_path)
-            mem = get_memory()
-            if mem != -1:
-                self.storage["persistent"] = mem["persistent"]["free"]
-                self.storage["transient"] = (
-                    mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
-                )
+            self.update_memory()
             self.title_bar_signal.emit(self.make_title_bar_string())
 
     def uninstall_app(self, aid, force=False):
@@ -543,19 +547,25 @@ class NFCHandlerThread(QThread):
     def change_key(self, new_key):
         uid = self.current_uid
 
-        cmd = ["--keyset", "0", "--new-key", f"0x00:ALL={new_key}"]
+        cmd = ["--lock", new_key]
         result = self.run_gp(cmd, "Unable to change key:")
 
+        print("change key result")
         print(result)
-        if new_key != DEFAULT_KEY and self.app.config["known_tags"].get(uid):
-            self.known_tags_update_signal(uid, new_key)
-        if self.app.secure_storage:
-            # Add a new signal
-            pass
+        if result == -1:
+            return
+
+        self.known_tags_update_signal.emit(uid, new_key)
+
+    def pause(self):
+        self._pause_event.clear()
+
+    def resume(self):
+        self._pause_event.set()
 
     def stop(self):
-        """Signal the loop to exit gracefully."""
-        self.running = False
+        self._stop_event.set()
+        self.resume()
 
 
 def detect_encoding(file_path):
