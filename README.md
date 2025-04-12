@@ -8,6 +8,17 @@ Looking for more information? Checkout the [flexSecure repo docs](https://github
 > [!CAUTION]
 > Disclaimer: Use at your own risk. I'm not liable for bricked chips.<br />
 > DO NOT USE ON APEX DEVICES--THE DEVICE WILL BE BRICKED!
+> <br />
+> <br />
+> Now that we got that over. The risk is no greater than using Global Platform Pro.
+> During every call to gp, this is app checks its config to see if the smart card
+> scanned is: A, has been scanned before, and B, has a default key. If either condition
+> is false, it bails. However, if you give it an incorrect key, it will send it. Enough
+> consecutive, incorrect key entries will brick your device.
+
+> [!NOTE]
+> If you do accidentally enter an invalid key, entering the correct key will reset
+> the counter. 👍
 
 Rebooted from Tkinter to PyQt. Still early.
 

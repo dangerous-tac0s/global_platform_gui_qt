@@ -29,7 +29,12 @@ FLEXSECURE_AID_MAP = {
 }
 
 
-UNSUPPORTED_APPS = ["FIDO2.cap", "Satodime.cap", "keycard.cap"]
+UNSUPPORTED_APPS = [
+    "FIDO2.cap",
+    "Satodime.cap",
+    "keycard.cap",
+    "SmartPGPApplet-large.cap",
+]
 
 # GitHub repository information for this plugin.
 OWNER = "DangerousThings"
