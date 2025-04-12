@@ -34,7 +34,6 @@ class SecureStorage:
         return self.__meta
 
     def select_key(self) -> bytes:
-        print("selecting key")
         if self.__method == "keyring":
             b64key = keyring.get_password(self.service_name, self.__key_id)
             if not b64key:
@@ -81,6 +80,7 @@ class SecureStorage:
         self.__data = initial_data
 
         self.save()
+        self.load()
 
     def change_method(self, new_method: str, new_key_id: str):
         if self.__data is None:
