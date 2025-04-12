@@ -97,6 +97,7 @@ class NFCHandlerThread(QThread):
                     self.readers_updated_signal.emit(reader_names)
                     last_readers = reader_names
 
+                # No readers
                 if not reader_names:
                     if self.card_detected:
                         self.card_detected = False
@@ -109,30 +110,26 @@ class NFCHandlerThread(QThread):
                     self.msleep(timeout_duration)
                     continue
 
+                # We've got a selected reader
                 if self.selected_reader_name in reader_names:
                     idx = reader_names.index(self.selected_reader_name)
                     reader = available_readers[idx]
                     uid = self.get_card_uid(reader)
+
+                    # There's a tag present
                     if uid:
                         if not self.card_detected or uid != self.current_uid:
+                            # TODO: is_jcop migration fixes
                             jcop3 = self.is_jcop()
                             self.valid_card_detected = jcop3
                             self.card_detected = True
                             self.current_uid = uid
                             self.card_present_signal.emit(True)
                             if jcop3:
-                                mem = get_memory()
-                                self.storage["persistent"] = mem["persistent"]["free"]
-                                self.storage["transient"] = (
-                                    mem["transient"]["reset_free"]
-                                    + mem["transient"]["deselect_free"]
-                                )
-                                formatted_mem = self.get_memory_status(mem)
-                                self.title_bar_signal.emit(
-                                    f"UID: {self.current_uid} > {formatted_mem}"
-                                )
+                                self.update_memory()
+                                self.title_bar_signal.emit(self.make_title_bar_string())
 
-                                self.get_key_signal.emit(self.current_uid)
+                                self.get_key()
 
                             else:
                                 self.status_update_signal.emit(
@@ -160,12 +157,29 @@ class NFCHandlerThread(QThread):
                 self.msleep(timeout_duration)
 
             except Exception as e:
-                self.error_signal.emit(f"Loop error: {e}")
-                # self.status_update.emit(f"Loop error: {e}")
+                self.error_signal.emit(f"NFC Thread Loop error: {e}")
 
     def stop(self):
         """Signal the loop to exit gracefully."""
         self.running = False
+
+    def make_title_bar_string(self):
+        uid = self.current_uid
+        message = ""
+
+        if uid is None:
+            return "Global Platform GUI"
+
+        elif self.app.secure_storage is not None and self.app.secure_storage[
+            "tags"
+        ].get(uid):
+            message += self.app.secure_storage["tags"][uid]["name"]
+        else:
+            message += uid
+
+        message += " " + self.get_memory_status()
+
+        return message
 
     # --------------------------
     #  Card / GP utility methods
@@ -182,6 +196,8 @@ class NFCHandlerThread(QThread):
             return None
         except (NoCardException, CardConnectionException):
             return None
+        except Exception as e:
+            self.error_signal.emit(f"Unable to get UID: {e}")
 
     def is_jcop(self):
         """
@@ -196,7 +212,7 @@ class NFCHandlerThread(QThread):
             data, sw1, sw2 = connection.transmit(SELECT)
             return hex(sw1) == "0x90" and sw2 == 0
         except Exception as e:
-            print(e)
+            print(f"Unable to perform select: {e}")
             return False
 
     def is_jcop3(self, reader_name):
@@ -214,21 +230,28 @@ class NFCHandlerThread(QThread):
         except Exception as e:
             return False
 
-    def get_memory_status(self, memory):
+    def update_memory(self):
+        memory = get_memory()
+        free = memory["persistent"]["free"] / 1024
+        t_free = (
+            memory["transient"]["reset_free"] + memory["transient"]["deselect_free"]
+        ) / 1024
+
+        self.storage["persistent"] = free
+        self.storage["transient"] = t_free
+
+    def get_memory_status(self):
         """Call measure.get_memory()."""
-        try:
-            if memory and memory != -1:
-                free = memory["persistent"]["free"] / 1024
-                percent = memory["persistent"]["percent_free"] * 100
-                t_free = (
-                    memory["transient"]["reset_free"]
-                    + memory["transient"]["deselect_free"]
-                ) / 1024
-                return f"Free Memory > Persistent: {free:.0f}kB / Transient: {t_free:.1f}kB"
-            elif memory == -1:
-                return "Javacard Memory not installed"
-        except Exception as e:
-            return f"Memory Error: {e}"
+        if self.storage["persistent"] != -1 and self.storage["transient"] != -1:
+            # free = memory["persistent"]["free"] / 1024
+            # percent = memory["persistent"]["percent_free"] * 100
+            # t_free = (
+            #     memory["transient"]["reset_free"]
+            #     + memory["transient"]["deselect_free"]
+            # ) / 1024
+            return f"> Free Memory > Persistent: {self.storage["persistent"]:.0f}kB / Transient: {self.storage["transient"]:.1f}kB"
+        else:
+            return "Javacard Memory not installed"
 
     def get_installed_apps(self):
         """
@@ -240,12 +263,8 @@ class NFCHandlerThread(QThread):
             self.status_update_signal.emit("No reader selected for get_installed_apps.")
             return {}
 
-        if (
-            self.key is None
-            or self.app.config["known_tags"].get(self.current_uid, None) is None
-        ):
+        if self.key is None:
             return  # Protect unknown tags
-
         try:
             cmd = [
                 *self.gp[os.name],
@@ -331,8 +350,7 @@ class NFCHandlerThread(QThread):
             return installed_apps
 
         except Exception as e:
-            self.status_update_signal.emit(f"Exception listing apps: {e}")
-            print(e)
+            self.error_signal.emit(f"Exception listing apps: {e}")
             return {}
 
     # ----------------------------
@@ -343,24 +361,15 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, "No reader selected.")
             return
 
-        tag_known = self.app.config["known_tags"].get(self.current_uid)
-        if self.key is None or not tag_known:
-            if self.key is None:
-                self.error_signal("Key is not set!")
-            if tag_known is False:
-                self.error_signal("Key is non-default")
-            if tag_known is None:
-                self.error_signal("Tag is not known")
-            return  # Protect unknown tags
-
         try:
-            if self.key is None:
+            if self.key is None or len(self.key) == 0:
                 # TODO: request key with dialog
                 self.show_key_prompt_signal.emit(self.current_uid)
 
             if self.key is None:
                 # if we still don't have one, don't do anything
                 self.error_signal.emit("No valid key has been provided")
+                return
             else:
                 cmd = [
                     *self.gp[os.name],
@@ -381,22 +390,11 @@ class NFCHandlerThread(QThread):
                     installed = self.get_installed_apps()
                     self.installed_apps_updated_signal.emit(installed)
                 else:
-                    if result.stderr.startswith(
-                        "Failed to open secure channel: Card cryptogram invalid!"
-                    ):
-                        # Wrong key provided--don't do that again!
-                        self.key = None
-                        self.known_tags_update_signal.emit(self.current_uid, False)
-                        self.error_signal.emit(
-                            "Invalid key used: further attempts with invalid keys can brick the device!"
-                        )
-                        self.known_tags_update_signal.emit(self.current_uid, False)
-                    else:
-                        err_msg = f"Install failed: {result.stderr}"
-                        # self.operation_complete.emit(False, err_msg)
-                        self.error_signal.emit(err_msg)
-                        # Let's try to remove the app now
-                        self.uninstall_app_by_cap(cap_file_path)
+                    err_msg = f"Install failed: {result.stderr}"
+                    # self.operation_complete.emit(False, err_msg)
+                    self.error_signal.emit(err_msg)
+                    # Let's try to remove the app now
+                    self.uninstall_app_by_cap(cap_file_path)
         except Exception as e:
             err_msg = f"Install error: {e}"
             # self.operation_complete.emit(False, err_msg)
@@ -408,12 +406,12 @@ class NFCHandlerThread(QThread):
             ):
                 os.remove(cap_file_path)
             mem = get_memory()
-            self.storage["persistent"] = mem["persistent"]["free"]
-            self.storage["transient"] = (
-                mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
-            )
-            formatted_mem = self.get_memory_status(mem)
-            self.title_bar_signal.emit(f"UID: {self.current_uid} > {formatted_mem}")
+            if mem != -1:
+                self.storage["persistent"] = mem["persistent"]["free"]
+                self.storage["transient"] = (
+                    mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
+                )
+            self.title_bar_signal.emit(self.make_title_bar_string())
 
     def uninstall_app(self, aid, force=False):
         """
@@ -424,30 +422,21 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, "No reader selected.")
             return
 
-        if (
-            self.key is None
-            or self.app.config["known_tags"].get(self.current_uid, None) is None
-        ):
-            return  # Protect unknown tags
-
         try:
             if self.key is None:
-                # TODO: request key with dialog
-                pass
-
-            if self.key is None:
                 # if we still don't have one, don't do anything
-                self.error_signal.emit("No valid key has been provided")
-                self.operation_complete_signal(False)
+                self.operation_complete_signal.emit(
+                    False, "No valid key has been provided"
+                )
                 return
 
-            cmd = [*self.gp[os.name], "-k", self.key, "--uninstall"]
+            cmd = [*self.gp[os.name], "-k", self.key, "--delete"]
             cmd.extend([aid, "-r", self.selected_reader_name])
             if force:
-                cmd.extend("-f")  # or '--force' if gp.jar uses that
+                cmd.append("-f")  # or '--force' if gp.jar uses that
             result = subprocess.run(cmd, capture_output=True, text=True)
 
-            if result.returncode == 0 and len(result.stderr) == 0:
+            if len(result.stderr) == 0:
                 self.operation_complete_signal.emit(True, f"Uninstalled {aid}")
                 installed = self.get_installed_apps()
                 self.installed_apps_updated_signal.emit(installed)
@@ -462,20 +451,15 @@ class NFCHandlerThread(QThread):
                         "Invalid key used: further attempts with invalid keys can brick the device!"
                     )
                 else:
-                    pass
+                    self.error_signal.emit(result.stderr)
 
         except Exception as e:
             err_msg = f"Uninstall error (AID): {e}"
             self.operation_complete_signal.emit(False, err_msg)
             self.error_signal.emit(err_msg)
         finally:
-            mem = get_memory()
-            self.storage["persistent"] = mem["persistent"]["free"]
-            self.storage["transient"] = (
-                mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
-            )
-            formatted_mem = self.get_memory_status(mem)
-            self.title_bar_signal.emit(f"UID: {self.current_uid} > {formatted_mem}")
+            self.update_memory()
+            self.title_bar_signal.emit(self.make_title_bar_string())
 
     def uninstall_app_by_cap(self, cap_file_path, fallback_aid=None, force=False):
         """
@@ -487,11 +471,10 @@ class NFCHandlerThread(QThread):
             self.operation_complete_signal.emit(False, "No reader selected.")
             return
 
-        if (
-            self.key is None
-            or self.app.config["known_tags"].get(self.current_uid, None) is None
-        ):
-            return  # Protect unknown tags
+        if self.key is None:
+            # if we still don't have one, don't do anything
+            self.operation_complete_signal.emit(False, "No valid key has been provided")
+            return
 
         try:
             # Build the command:
@@ -531,16 +514,11 @@ class NFCHandlerThread(QThread):
             # TODO: Support caching
             if os.path.exists(cap_file_path):
                 os.remove(cap_file_path)
-            mem = get_memory()
-            self.storage["persistent"] = mem["persistent"]["free"]
-            self.storage["transient"] = (
-                mem["transient"]["reset_free"] + mem["transient"]["deselect_free"]
-            )
-            formatted_mem = self.get_memory_status(mem)
-            self.title_bar_signal.emit(f"UID: {self.current_uid} > {formatted_mem}")
+            self.update_memory()
+            self.title_bar_signal.emit(self.make_title_bar_string())
 
     def get_key(self):
-        self.get_key_signal.emit()
+        self.get_key_signal.emit(self.current_uid)
 
     @pyqtSlot(str)
     def key_setter(self, key):

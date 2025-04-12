@@ -7,8 +7,10 @@ import importlib
 import textwrap
 import time
 
+import gnupg
+
 import markdown
-from PyQt5.QtGui import QIcon, QFont, QMouseEvent
+from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -26,13 +28,60 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QFormLayout,
     QTextBrowser,
+    QInputDialog,
+    QAction,
+    QMainWindow,
+    QDialogButtonBox,
 )
-from PyQt5.QtCore import QTimer, QObject, QEvent, Qt, QSize
+from PyQt5.QtCore import QTimer, Qt, QSize
 
 from file_thread import FileHandlerThread
 from nfc_thread import NFCHandlerThread, resource_path, DEFAULT_KEY
+from secure_storage import SecureStorage
+
+try:
+    import keyring
+except ImportError:
+    keyring = None
+
+
+WIDTH_HEIGHT = [800, 600]
 
 APP_TITLE = "GlobalPlatformPro App Manager"
+
+"""
+    [dict[str, bool]] known_keys:
+        [bool] uid:str - if the UID uses a default key, true, else false
+    [bool] cache_latest_release=False
+    """
+DEFAULT_CONFIG = {
+    "cache_latest_release": False,
+    # [app]: epoch time
+    "last_checked": {},
+    "known_tags": {},
+    "window": {
+        "height": WIDTH_HEIGHT[1],
+        "width": WIDTH_HEIGHT[0],
+        # "font_size": ""
+    },
+}
+
+"""
+    tags: 
+        {
+            "name": default is uid,
+            "key": default is DEFAULT_KEY
+        }
+"""
+
+DEFAULT_DATA = {"tags": {}}
+
+DEFAULT_DATA_FILE = {
+    "meta": {"version": 1, "encryption": None, "sale": None, "wrapped_key": None},
+    "data": DEFAULT_DATA,
+}
+
+DATA_FILE = "data.enc.json"
 
 #
 # Folder for caching .cap downloads
@@ -123,23 +172,61 @@ class MessageQueue:
             self.timer.stop()
 
 
-width_height = [800, 600]
 if os.name == "nt":
-    width_height = [2 * x for x in width_height]
+    width_height = [2 * x for x in WIDTH_HEIGHT]
 
 
-class GPManagerApp(QWidget):
+class GPManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.secure_storage = None
+        self.secure_storage_instance = SecureStorage(
+            DATA_FILE, service_name="GlobalPlatformGUI"
+        )
+
+        self.secure_storage_dialog = None
         self.setWindowTitle(APP_TITLE)
         self.setWindowIcon(QIcon(resource_path("favicon.ico")))
 
         self.layout = QVBoxLayout()
+        self.central_widget = QWidget(self)  # Create the central widget
+        self.central_widget.setLayout(
+            self.layout
+        )  # Set the layout on the central widget
+        self.setCentralWidget(self.central_widget)
 
         # Status label at the top
         self.status_label = QLabel("Checking for readers...")
         self.layout.addWidget(self.status_label)
         self.message_queue = MessageQueue(self.status_label)
+
+        # Create the menu bar
+        self.menu_bar = self.menuBar()
+
+        file_menu = self.menu_bar.addMenu("File")
+        settings_action = QAction("Settings", self)
+        settings_action.setEnabled(False)
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self.quit_app)
+        file_menu.addAction(settings_action)
+        file_menu.addSeparator()
+        file_menu.addAction(quit_action)
+
+        tag_menu = self.menu_bar.addMenu("Tag")
+        set_tag_name_action = QAction("Set Name", self)
+        set_tag_name_action.triggered.connect(self.set_tag_name)
+        set_tag_key_action = QAction("Set Key", self)
+        set_tag_key_action.triggered.connect(self.set_tag_key)
+        change_tag_key_action = QAction("⚠️ Change Key ⚠️", self)
+        change_tag_key_action.triggered.connect(self.set_tag_key)
+        change_tag_key_action.setEnabled(False)
+
+        tag_menu.addAction(set_tag_name_action)
+        tag_menu.addAction(set_tag_key_action)
+        tag_menu.addAction(change_tag_key_action)
+        tag_menu.setEnabled(False)
+
+        self.tag_menu = tag_menu
 
         self.config = self.load_config()
         self.resize(self.config["window"]["width"], self.config["window"]["height"])
@@ -177,7 +264,8 @@ class GPManagerApp(QWidget):
         grid_layout.addWidget(self.uninstall_button, 2, 0)
 
         self.apps_grid_layout = grid_layout
-        self.installed_list.currentItemChanged.connect(self.show_details_pane)
+        # TODO: Installed app details/configuration
+        # self.installed_list.currentItemChanged.connect(self.show_installed_details_pane) # TODO: So configuration tools and or description
         self.available_list.currentItemChanged.connect(self.show_details_pane)
 
         self.layout.addLayout(self.apps_grid_layout)
@@ -187,7 +275,31 @@ class GPManagerApp(QWidget):
         self.download_bar.hide()
         self.layout.addWidget(self.download_bar)
 
-        self.setLayout(self.layout)
+        self.central_widget.setLayout(self.layout)
+
+        # Load secure storage
+        if os.path.exists(DATA_FILE):
+            try:
+                self.secure_storage_instance.load()
+                self.secure_storage = self.secure_storage_instance.get_data()
+            except RuntimeError:
+                self.show_error_dialog("Secure storage not decrypted.")
+                self.secure_storage = None
+
+            if self.secure_storage:
+                # Make sure all our tags in secure storage are in config
+                updated_config = False
+                for tag in self.secure_storage["tags"].keys():
+                    if not self.config["known_tags"].get(tag):
+                        self.config["known_tags"][tag] = (
+                            self.secure_storage["tags"][tag]["key"] == DEFAULT_KEY
+                        )
+                        updated_config = True
+                if updated_config:
+                    self.write_config()
+        else:
+            # You can opt out... But I'm gonna ask every time.
+            self.prompt_setup()
 
         #
         # 1) Load all plugins
@@ -250,11 +362,11 @@ class GPManagerApp(QWidget):
             for cap_n, description_md in descriptions.items():
                 self.app_descriptions[cap_n] = description_md
 
+            # Merge for easy access to storage requirements
             self.storage = self.storage | plugin_instance.storage
 
         #
-        # 3) Populate the "Available Apps" list from self.available_apps_info,
-        #    skipping unsupported apps
+        # 3) Populate the "Available Apps" list
         #
         self.populate_available_list()
 
@@ -283,6 +395,9 @@ class GPManagerApp(QWidget):
         self.current_plugin = None
 
         self.nfc_thread.start()
+
+        if self.secure_storage:
+            self.handle_tag_menu()
 
     def handle_details_pane_back(self):
         # Remove the details pane
@@ -313,7 +428,6 @@ class GPManagerApp(QWidget):
         if self.app_descriptions.get(selected_app) is None:
             return  # description is missing
 
-        is_installed_apps = False
         is_showing_details = False
 
         viewer = QTextBrowser()
@@ -322,15 +436,7 @@ class GPManagerApp(QWidget):
             markdown.markdown(textwrap.dedent(self.app_descriptions[selected_app]))
         )
 
-        if (
-            not self.apps_grid_layout.itemAtPosition(1, 0).widget()
-            == self.installed_list
-            and not is_installed_apps
-        ) or (
-            not self.apps_grid_layout.itemAtPosition(1, 1).widget()
-            == self.available_list
-            and is_installed_apps
-        ):
+        if self.apps_grid_layout.itemAtPosition(1, 0).widget() != self.installed_list:
             is_showing_details = True
 
         if not is_showing_details:
@@ -352,6 +458,12 @@ class GPManagerApp(QWidget):
                 self.apps_grid_layout.itemAtPosition(0, 0).widget()
             )
             self.apps_grid_layout.addWidget(viewer, 0, 0, 2, 1)
+
+    def handle_tag_menu(self):
+        if self.secure_storage and not self.tag_menu.isEnabled():
+            self.tag_menu.setEnabled(True)
+        elif not self.secure_storage and self.tag_menu.isEnabled():
+            self.tag_menu.setEnabled(False)
 
     def update_plugin_releases(self):
         self.message_queue.add_message("Fetching latest plugin releases...")
@@ -457,11 +569,33 @@ class GPManagerApp(QWidget):
         if present:
             if self.nfc_thread.valid_card_detected:
                 self.message_queue.add_message("Compatible card present.")
+                uid = self.nfc_thread.current_uid
+
+                if (
+                    self.secure_storage
+                    and uid
+                    and not self.secure_storage["tags"].get(uid)
+                ):
+                    self.secure_storage["tags"][uid] = {
+                        "name": uid,
+                        "key": self.nfc_thread.key,
+                    }
+                    self.write_secure_storage()
+
                 if self.nfc_thread.key is not None:
+                    if (
+                        self.secure_storage
+                        and self.secure_storage["tags"].get(uid)
+                        and not self.secure_storage["tags"][uid]["key"]
+                    ):
+                        self.secure_storage["tags"][uid]["key"] = self.nfc_thread.key
+                        self.write_secure_storage()
+
                     self.install_button.setEnabled(True)
                     self.uninstall_button.setEnabled(True)
                     installed = self.nfc_thread.get_installed_apps()
-                    self.on_installed_apps_updated(installed)
+                    if installed is not None:
+                        self.on_installed_apps_updated(installed)
             else:
                 self.install_button.setEnabled(False)
                 self.uninstall_button.setEnabled(False)
@@ -625,10 +759,11 @@ class GPManagerApp(QWidget):
         cap_name = selected[0].text()
 
         # If the entry indicates an unknown app (i.e. no plugin info), fallback to uninstall by AID.
-        if cap_name.startswith("Unknown: "):
-            raw_aid = cap_name.split("Unknown: ", 1)[1]
-            self.nfc_thread.uninstall_app(raw_aid)
-            return
+
+        if "Unknown" in cap_name:
+            raw_aid = cap_name.split(" ", 1)[1]
+            self.message_queue.add_message(f"Attempting to uninstall: {raw_aid}")
+            return self.nfc_thread.uninstall_app(raw_aid, force=True)
 
         # Look up available info for the selected cap.
         if cap_name not in self.available_apps_info:
@@ -755,39 +890,78 @@ class GPManagerApp(QWidget):
         event.accept()
 
     def show_error_dialog(self, message: str):
-        QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
+        # Was there a bad touch?
+        if "Failed to open secure channel" in message:
+            # Yup
+            uid = self.nfc_thread.current_uid
+            self.nfc_thread.key = None
+            # Make sure we tell it we don't know the key in the config
+            self.config["known_tags"][uid] = False
+            self.write_config()
+            if self.secure_storage:
+                if self.secure_storage["tags"].get(uid):
+                    # Remove the naughty key
+                    self.secure_storage["tags"][uid]["key"] = None
+                    self.write_secure_storage()
+            message = "Bad touch! Invalid key! Further attempts without a successful auth will brick the device!"
+            QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
+            self.prompt_for_key(uid, "")
+        else:
+            QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
 
     def get_key(self, uid):
-        is_default_key = self.config["known_tags"].get(uid, None)
-        if is_default_key:
-            self.nfc_thread.key_setter_signal.emit(DEFAULT_KEY)
-            self.nfc_thread.status_update_signal.emit("Key set.")
-            self.update_card_presence(True)
+        """
+        Get the key for the user's smart card.
+        - Have we seen the tag before?
+        - If so, did it have a default key?
+        """
+        key = None
+        if self.secure_storage is not None:
+            if self.secure_storage["tags"].get(uid):
+                key = self.secure_storage["tags"][uid]["key"]
+        if key is None:
+            is_default_key = self.config["known_tags"].get(uid, None)
+            if is_default_key:
+                key = DEFAULT_KEY
 
-        else:
-            if is_default_key is None:
-                res = self.prompt_for_key(uid)
-            else:
-                # TODO: check secure storage for key
-                res = self.prompt_for_key(uid, "sds")
+        if key is None:
+            res = self.prompt_for_key(uid)
 
             if res and res.get("key", False) is False:
                 self.show_error_dialog("No key found.")
+                return
             elif res is None:
                 return
-            else:
-                self.nfc_thread.key_setter_signal.emit(res["key"])
-                self.update_card_presence(True)
-                self.nfc_thread.status_update_signal.emit("Key set.")
+
+            key = res["key"]
+
+        self.nfc_thread.key_setter_signal.emit(key)
+        self.nfc_thread.status_update_signal.emit("Key set.")
+        self.update_card_presence(True)
 
     def prompt_for_key(self, uid: str, existing_key: str = None):
-        dialog = KeyDialog(uid=uid, exiting_key=existing_key)  # No existing key
+        """
+        Prompts the user to enter their smart card's key
+        """
+        is_new = self.config["known_tags"].get(uid, False) != False
+        dialog = KeyDialog(
+            uid=uid,
+            exiting_key=existing_key,
+            is_new=is_new,
+        )  # No existing key
         if dialog.exec_():  # Show dialog and wait for user action
             res = dialog.get_results()
 
             if not self.config["known_tags"].get(res["uid"]):
-                self.config["known_tags"][res["uid"]] = None
-            self.update_known_tags(res["uid"], res["key"] == DEFAULT_KEY)
+                self.config["known_tags"][uid] = False
+            self.update_known_tags(uid, res["key"] == DEFAULT_KEY)
+
+            if self.secure_storage is not None:
+                if not self.secure_storage["tags"].get(uid):
+                    self.secure_storage["tags"][uid] = {"name": uid, "key": res["key"]}
+                else:
+                    self.secure_storage["tags"][uid]["key"] = res["key"]
+                self.write_secure_storage()
 
             return res
 
@@ -797,23 +971,125 @@ class GPManagerApp(QWidget):
         else:
             self.setWindowTitle(APP_TITLE)
 
+    def set_tag_name(self):
+        # Prompt for the tag name using QInputDialog
+        tag_name, ok = QInputDialog.getText(
+            self, "Set Tag Name", "Enter the tag name:", QLineEdit.Normal
+        )
+        if ok and tag_name:
+            if not self.secure_storage["tags"].get(self.nfc_thread.current_uid):
+                self.secure_storage["tags"][self.nfc_thread.current_uid] = {
+                    "name": self.nfc_thread.current_uid,
+                    "key": (
+                        DEFAULT_KEY
+                        if self.config["known_tags"].get(self.nfc_thread.current_uid)
+                        else None
+                    ),
+                }
+            # Process the tag name (store it, set it, etc.)
+            self.secure_storage["tags"][self.nfc_thread.current_uid]["name"] = tag_name
+            self.write_secure_storage()
+            self.update_title_bar(self.nfc_thread.make_title_bar_string())
+
+    def set_tag_key(self):
+        # Prompt for the tag key using QInputDialog
+        tag_key, ok = QInputDialog.getText(
+            self, "Set Tag Key", "Enter the tag key:", QLineEdit.Normal
+        )
+        if ok and tag_key:
+            if len(tag_key) % 2 != 0:
+                self.show_error_dialog("Keys must have an even length")
+                while len(tag_key) % 2 != 0:
+                    tag_key, ok = QInputDialog.getText(
+                        self, "Set Tag Key", "Enter the tag key:", QLineEdit.Normal
+                    )
+                    if not ok:
+                        break
+            uid = self.nfc_thread.current_uid
+            if not self.secure_storage["tags"].get(uid):
+                self.secure_storage["tags"][uid] = {
+                    "name": uid,
+                    "key": DEFAULT_KEY if self.config["known_tags"].get(uid) else None,
+                }
+            self.secure_storage["tags"][uid]["key"] = tag_key
+            self.config["known_tags"][uid] = DEFAULT_KEY == tag_key
+            self.write_secure_storage()
+            self.write_config()
+            self.nfc_thread.key = tag_key
+            self.on_operation_complete(
+                True,
+                f"{self.secure_storage["tags"][uid]["name"]}'s saved key is now: {tag_key}",
+            )
+
+    def quit_app(self):
+        # Handle quitting the application
+        reply = QMessageBox.question(
+            self,
+            "Quit",
+            "Are you sure you want to quit?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+
+            QApplication.instance().quit()
+
+    def prompt_setup(self):
+        def initialize_and_accept():
+            method = self.secure_storage_dialog.method_selector.currentText()
+            context = {}
+
+            if method == "gpg":
+                context = select_gpg_key(context)
+                self.secure_storage_instance.initialize(
+                    method, key_id=context["keyid"], initial_data=DEFAULT_DATA
+                )
+            else:
+                self.secure_storage_instance.initialize(
+                    method, initial_data=DEFAULT_DATA
+                )
+
+            if self.secure_storage_instance.get_data():
+                self.secure_storage = self.secure_storage_instance.get_data()
+            dialog.accept()
+
+        dialog = QDialog(self)
+        layout = QFormLayout()
+        layout.addWidget(QLabel("Select encryption method:"))
+        dialog.method_selector = QComboBox()
+        dialog.method_selector.addItems(["keyring", "gpg"])
+        dialog.method_selector.setCurrentIndex(0)
+        layout.addWidget(dialog.method_selector)
+
+        btn = QPushButton("Initialize")
+        btn.clicked.connect(initialize_and_accept)
+        layout.addWidget(btn)
+
+        dialog.setLayout(layout)
+        self.secure_storage_dialog = dialog
+        dialog.finished.connect(self.on_setup_dialog_finish)
+
+        result = dialog.exec_()
+
+        return dialog.method_selector.currentText()
+
+    def on_setup_dialog_finish(self, result):
+        if result == 1:
+            if self.secure_storage_dialog.method_selector.currentText() is not None:
+                # Load our file to make sure it works...
+                self.secure_storage_instance.load()
+            else:
+                self.secure_storage = None
+        else:
+            self.secure_storage = None
+
+    def write_secure_storage(self):
+        if not self.secure_storage_instance:
+            return
+        self.secure_storage_instance.save()
+
     def load_config(self):
-        """
-        [dict[str, bool]] known_keys:
-            [bool] uid:str - if the UID uses a default key, true, else false
-        [bool] cache_latest_release=False
-        """
-        default_config = {
-            "cache_latest_release": False,
-            # [app]: epoch time
-            "last_checked": {},
-            "known_tags": {},
-            "window": {
-                "height": width_height[1],
-                "width": width_height[0],
-                # "font_size": ""
-            },
-        }
+
         if os.path.exists("config.json"):
             with open("config.json", "r") as fh:
                 config = json.load(fh)
@@ -823,18 +1099,21 @@ class GPManagerApp(QWidget):
 
             # Did I update something? Let's make sure the config is updated.
             key_added = False
-            for key in default_config.keys():
+            for key in DEFAULT_CONFIG.keys():
                 if config.get(key) is None:
-                    config[key] = default_config[key]
+                    config[key] = DEFAULT_CONFIG[key]
                     key_added = True
+
+            if key_added:
+                self.write_config()
 
             return config
         else:
             # create default
             with open("config.json", "w") as fh:
-                json.dump(default_config, fh, indent=4)
+                json.dump(DEFAULT_CONFIG, fh, indent=4)
 
-            return default_config
+            return DEFAULT_CONFIG
 
     def write_config(self):
         with open("config.json", "w") as fh:
@@ -853,6 +1132,24 @@ class GPManagerApp(QWidget):
                 self.message_queue.add_message(
                     f"Updated {uid}. Default key: {default_key}"
                 )
+
+                # Handle out secure storage.
+                if self.secure_storage is not None:
+                    if self.secure_storage["tags"].get(uid):
+                        if not self.secure_storage["tags"].get(uid):
+                            self.secure_storage["tags"][uid] = {
+                                "name": uid,
+                                "key": None,
+                            }
+                        # This is designed to catch key rejections
+                        if (
+                            not default_key
+                            and self.secure_storage["tags"]["key"] == DEFAULT_KEY
+                        ):
+                            self.secure_storage["tags"][uid]["tags"] = None
+                        # elif default_key and self.secure_storage["tags"]["key"] != DEFAULT_KEY:
+                        #     self.secure_storage["tags"][uid]["key"] = DEFAULT_KEY
+
         self.write_config()
 
     def query_known_tags(self, uid: str) -> bool:
@@ -861,8 +1158,7 @@ class GPManagerApp(QWidget):
         - The bool indicates whether it has a default key
         Returns None when the tag is not known
         """
-        default_key = self.config["known_tags"].get(uid, False)
-        return default_key
+        return self.config["known_tags"].get(uid, False) == True
 
     def resizeEvent(self, event):
         new_size = event.size()
@@ -878,9 +1174,9 @@ class GPManagerApp(QWidget):
 
 
 class KeyDialog(QDialog):
-    def __init__(self, uid: str, exiting_key=None):
+    def __init__(self, uid: str, exiting_key=None, is_new=True):
         super().__init__()
-        if exiting_key is None or exiting_key != "None":
+        if is_new:
             dialog_title = "New Smart Card Found!"
         else:
             dialog_title = "Update Smart Card Key"
@@ -921,12 +1217,99 @@ class KeyDialog(QDialog):
         self.input_field.setText(DEFAULT_KEY)
 
 
+def prompt_for_password(self):
+    # Open a dialog to get the password securely
+    pw, ok = QInputDialog.getText(
+        self, "Set Keyring Password", "Enter your password:", QLineEdit.Password
+    )
+    if ok and pw:
+        return pw
+    else:
+        self.show_error("Password input failed or was canceled.")
+        return None
+
+
+def select_gpg_key(context):
+    gpg = gnupg.GPG()
+    gpg_keys = gpg.list_keys()
+
+    gpg_options = {
+        f"{x["keyid"]} ({x["uids"][0]})": {
+            "recipients": x["uids"],
+            "keyid": x["keyid"],
+        }
+        for x in gpg_keys
+    }
+
+    def handle_accept(self, x):
+        self.choice = x
+
+    choose_gpg_dialog = ComboDialog(
+        window_title="GPG",
+        combo_label="Choose a key",
+        options=list(gpg_options.keys()),
+        on_accept=handle_accept,
+        on_cancel=lambda x: f"Canceled: {x}",
+    )
+    choose_gpg_dialog.exec_()
+
+    choice = choose_gpg_dialog.choice
+    if choice is None:
+        app.show_error_dialog("No choice found")
+        return
+
+    gpg_context = gpg_options[choice]
+    context = context | gpg_context
+    return context
+
+
 def horizontal_rule():
     h_line = QFrame()
     h_line.setFrameShape(QFrame.HLine)
     h_line.setFrameShadow(QFrame.Sunken)
 
     return h_line
+
+
+class ComboDialog(QDialog):
+    def __init__(
+        self,
+        options,
+        on_accept,
+        on_cancel,
+        parent=None,
+        window_title="Select Option",
+        combo_label="Choose an Option",
+    ):
+        super().__init__(parent)
+        self.setWindowTitle(window_title)
+
+        self.on_accept = on_accept
+        self.on_cancel = on_cancel
+
+        layout = QVBoxLayout(self)
+
+        self.combo = QComboBox()
+        self.combo.addItems(options)
+        layout.addWidget(QLabel(combo_label))
+        layout.addWidget(self.combo)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.handle_accept)
+        buttons.rejected.connect(self.handle_cancel)
+        layout.addWidget(buttons)
+
+        self.setLayout(layout)
+        self.setModal(True)  # Halts app while this is open
+
+    def handle_accept(self):
+        selected = self.combo.currentText()
+        self.on_accept(self, selected)
+        self.accept()
+
+    def handle_cancel(self):
+        self.on_cancel()
+        self.reject()
 
 
 if __name__ == "__main__":
