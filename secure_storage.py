@@ -34,6 +34,7 @@ class SecureStorage:
         return self.__meta
 
     def select_key(self) -> bytes:
+        print("selecting key")
         if self.__method == "keyring":
             b64key = keyring.get_password(self.service_name, self.__key_id)
             if not b64key:
@@ -44,7 +45,6 @@ class SecureStorage:
             if not self.__wrapped_key_b64:
                 raise RuntimeError("No wrapped_key available for GPG")
             wrapped = base64.b64decode(self.__wrapped_key_b64)
-            # result = self.__gpg.decrypt(wrapped)
             try:
                 result = gpg_decrypt(wrapped)
                 return result
@@ -57,7 +57,6 @@ class SecureStorage:
     def initialize(self, method, key_id: str = None, initial_data={}):
         if self.meta:
             self.__method = method["keywrapping"]["method"]
-            print(self.meta)
         else:
             self.__method = method
             self.__key_id = key_id
@@ -73,14 +72,6 @@ class SecureStorage:
                 raise ValueError("GPG method requires key_id.")
 
             result = self.__gpg.encrypt(self.__aes_key, recipients=key_id, armor=True)
-            print(f"encrypted: {result.data}")
-
-            # try:
-            #     result = gpg_encrypt(self.__aes_key, recipient=key_id)
-            #
-            # except Exception as e:
-            #     print(f"GPG encryption failed: {e}")
-            #     return e
 
             self.__wrapped_key_b64 = base64.b64encode(result.data).decode()
 
@@ -99,7 +90,7 @@ class SecureStorage:
         self.__aes_key = None  # Clear old key reference
         self.initialize(new_method, new_key_id)
 
-    def load(self):
+    def load(self, retry=False):
         if not os.path.exists(self.__path):
             raise FileNotFoundError(f"Unable to find {self.__path}")
 
@@ -110,8 +101,6 @@ class SecureStorage:
         self.__method = meta["method"]
         self.__key_id = meta["key_id"]
 
-        print(meta)
-
         if self.__method == "keyring":
             b64key = keyring.get_password(self.service_name, self.__key_id)
             if not b64key:
@@ -119,16 +108,15 @@ class SecureStorage:
             self.__aes_key = base64.b64decode(b64key)
 
         elif self.__method == "gpg":
-            print("gpg found")
+            self.__wrapped_key_b64 = meta["wrapped_key_b64"]
             wrapped = base64.b64decode(meta["wrapped_key_b64"])
-            print(f"wrapped: {wrapped}")
-            # result = self.__gpg.decrypt(wrapped)
             try:
-                print("attempting decryption...")
                 result = gpg_decrypt(wrapped)
-                print(result)
             except Exception as e:
-                raise RuntimeError(e)
+                if not retry:
+                    self.load(retry=True)
+                else:
+                    raise RuntimeError(e)
 
             self.__aes_key = result
 
@@ -138,10 +126,6 @@ class SecureStorage:
         enc = obj["encryption"]
         iv = base64.b64decode(enc["iv"])
         tag = base64.b64decode(enc["tag"])
-        print(f"iv: {iv}")
-        print(f"iv len: {len(iv)}")
-        print(f"tag: {tag}")
-        print(f"tag len: {len(tag)}")
         ciphertext = base64.b64decode(obj["payload"])
         aesgcm = AESGCM(self.__aes_key)
         self.__data = json.loads(aesgcm.decrypt(iv, ciphertext + tag, None))
@@ -209,26 +193,10 @@ def gpg_decrypt(ciphertext: bytes) -> bytes:
     """
     Pin entry doesn't work with the library *sigh*
     """
-    # print(f"pre-decrypt: {ciphertext}")
-    # ciphertext = base64.b64decode(ciphertext)
-    print(f"decoded: {ciphertext}")
 
     p = subprocess.run(["gpg", "--decrypt"], input=ciphertext, capture_output=True)
 
     if p.returncode != 0:
-        print(f"stderr: {p.stderr.decode()}")
         raise RuntimeError(f"GPG decryption failed: {p.stderr.decode()}")
 
-    print(f"stdout: {p.stdout}")
     return p.stdout
-
-
-def gpg_encrypt(plaintext: bytes, recipient: str) -> bytes:
-    p = subprocess.run(
-        ["gpg", "--encrypt", "--armor", "--recipient", recipient],
-        input=plaintext,
-        capture_output=True,
-    )
-    if p.returncode != 0:
-        raise RuntimeError(f"GPG encryption failed: {p.stderr.decode()}")
-    return base64.b64encode(p.stdout)

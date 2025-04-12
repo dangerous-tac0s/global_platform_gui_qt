@@ -275,23 +275,24 @@ class GPManagerApp(QMainWindow):
 
         # Load secure storage
         if os.path.exists(DATA_FILE):
-            print("Loading secure storage...")
-            self.secure_storage_instance.load()
-            print(self.secure_storage_instance.get_data())
-            self.secure_storage = self.secure_storage_instance.get_data()
-            print("Secure Storage Contents:")
-            print(self.secure_storage)
+            try:
+                self.secure_storage_instance.load()
+                self.secure_storage = self.secure_storage_instance.get_data()
+            except RuntimeError:
+                self.show_error_dialog("Secure storage not decrypted.")
+                self.secure_storage = None
 
-            # Make sure all our tags in secure storage are in config
-            updated_config = False
-            for tag in self.secure_storage["tags"].keys():
-                if not self.config["known_tags"].get(tag):
-                    self.config["known_tags"][tag] = (
-                        self.secure_storage["tags"][tag]["key"] == DEFAULT_KEY
-                    )
-                    updated_config = True
-            if updated_config:
-                self.write_config()
+            if self.secure_storage:
+                # Make sure all our tags in secure storage are in config
+                updated_config = False
+                for tag in self.secure_storage["tags"].keys():
+                    if not self.config["known_tags"].get(tag):
+                        self.config["known_tags"][tag] = (
+                            self.secure_storage["tags"][tag]["key"] == DEFAULT_KEY
+                        )
+                        updated_config = True
+                if updated_config:
+                    self.write_config()
         else:
             # You can opt out... But I'm gonna ask every time.
             self.prompt_setup()
@@ -941,6 +942,15 @@ class GPManagerApp(QMainWindow):
             self, "Set Tag Name", "Enter the tag name:", QLineEdit.Normal
         )
         if ok and tag_name:
+            if not self.secure_storage["tags"].get(self.nfc_thread.current_uid):
+                self.secure_storage["tags"][self.nfc_thread.current_uid] = {
+                    "name": self.nfc_thread.current_uid,
+                    "key": (
+                        DEFAULT_KEY
+                        if self.config["known_tags"].get(self.nfc_thread.current_uid)
+                        else None
+                    ),
+                }
             # Process the tag name (store it, set it, etc.)
             self.secure_storage["tags"][self.nfc_thread.current_uid]["name"] = tag_name
             self.write_secure_storage()
@@ -1029,96 +1039,23 @@ class GPManagerApp(QMainWindow):
             if self.secure_storage_dialog.method_selector.currentText() is not None:
                 # self.initialize_file()
                 if result == "gpg":
-                    print(f"RESULT: {result}")
                     self.secure_storage_instance.save()
+                    # Load it to ensure we didn't break anything...
                     self.secure_storage_instance.load()
-                    print(self.secure_storage_instance.get_data())
-                    # gpg = gnupg.GPG()
-                    # gpg_keys = gpg.list_keys()
-                    #
-                    # gpg_options = {
-                    #     f"{x["keyid"]} ({x["uids"][0]})": {
-                    #         "recipients": x["uids"],
-                    #         "keyid": x["keyid"],
-                    #     }
-                    #     for x in gpg_keys
-                    # }
-                    # choose_gpg_dialog = ComboDialog(
-                    #     window_title="GPG",
-                    #     combo_label="Choose a key",
-                    #     options=list(gpg_options.keys()),
-                    #     on_accept=lambda x: print(f"choice {gpg_options[x]}"),
-                    #     on_cancel=lambda x: f"Canceled: {x}",
-                    # )
-                    # choose_gpg_dialog.exec_()
-                    # result = choose_gpg_dialog.result()
-                    # print("choice result")
-                    # print(result)
-                    # self.secure_storage_instance.initialize(
-                    #     method=result, key_id=choose_gpg_dialog.result()["keyid"]
-                    # )
-                    # print(self.secure_storage_instance)
                     pass
                 else:
-                    self.secure_storage_instance.initialize(method=result)
+                    self.secure_storage_instance.initialize(
+                        method=result, initial_data=DEFAULT_DATA
+                    )
             else:
                 self.secure_storage = None
         else:
             self.secure_storage = None
 
-    # def initialize_file(self):
-    #     method = self.secure_storage_dialog.method_selector.currentText()
-    #     context = {}
-    #     key = select_key(method, context, self)
-    #     print(method, key)
-    #     if not key:
-    #         self.show_error("Could not get key for encryption.")
-    #         return
-    #
-    #     encrypted = encrypt_json(DEFAULT_DATA, key)
-    #     payload = {
-    #         "meta": {
-    #             "version": 1,
-    #             "encryption": method,
-    #             "salt": base64.b64encode(context.get("salt", b"")).decode(),
-    #         },
-    #         "data": encrypted,
-    #     }
-    #
-    #     with open(DATA_FILE, "w") as f:
-    #         json.dump(payload, f, indent=2)
-    #
-    #     self.secure_storage = DEFAULT_DATA
-    #
     def write_secure_storage(self):
         if not self.secure_storage_instance:
             return
         self.secure_storage_instance.save()
-        # try:
-        #     with open(DATA_FILE, "r") as f:
-        #         payload = json.load(f)
-        #
-        #     meta = payload.get("meta", {})
-        #     method = meta.get("encryption")
-        #     salt_b64 = meta.get("salt", "")
-        #     salt = base64.b64decode(salt_b64) if salt_b64 else b""
-        #
-        #     context = {"salt": salt}
-        #     key = select_key(method, context, self)
-        #     if not key:
-        #         self.show_error("Failed to retrieve encryption key.")
-        #         return
-        #
-        #     encrypted = encrypt_json(self.secure_storage, key)
-        #     payload["data"] = encrypted
-        #
-        #     with open(DATA_FILE, "w") as f:
-        #         json.dump(payload, f, indent=2)
-        #
-        #     self.message_queue.add_message("Storage updated")
-        #
-        # except Exception as e:
-        #     self.show_error(f"Failed to update file: {str(e)}")
 
     def load_config(self):
 
@@ -1135,6 +1072,9 @@ class GPManagerApp(QMainWindow):
                 if config.get(key) is None:
                     config[key] = DEFAULT_CONFIG[key]
                     key_added = True
+
+            if key_added:
+                self.write_config()
 
             return config
         else:
@@ -1256,138 +1196,6 @@ def prompt_for_password(self):
     else:
         self.show_error("Password input failed or was canceled.")
         return None
-
-
-# def encrypt_json(data: dict, key: bytes) -> dict:
-#     aesgcm = AESGCM(key)
-#     nonce = os.urandom(12)
-#     plaintext = json_bytes(data)
-#     ciphertext = aesgcm.encrypt(nonce, plaintext, None)
-#     return {
-#         "nonce": base64.b64encode(nonce).decode(),
-#         "ciphertext": base64.b64encode(ciphertext).decode(),
-#     }
-#
-#
-# def decrypt_json(blob: dict, key: bytes) -> dict:
-#     aesgcm = AESGCM(key)
-#     nonce = base64.b64decode(blob["nonce"])
-#     ciphertext = base64.b64decode(blob["ciphertext"])
-#     plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-#     return json.loads(plaintext.decode())
-
-#
-# def json_bytes(data):
-#     import json
-#
-#     return json.dumps(data, separators=(",", ":")).encode()
-
-
-# def derive_key(password: str, salt: bytes) -> bytes:
-#     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100_000, dklen=32)
-#
-#
-# def select_key(method, context, app):
-#     if method == "fallback":
-#         # Prompt the user for a password via a dialog
-#         pw = app.prompt_for_password_dialog()
-#         if not pw:
-#             return None
-#
-#         salt = os.urandom(16)
-#         context["salt"] = salt
-#         return derive_key(pw, salt)
-#
-#     elif method == "keyring":
-#         if keyring is None:
-#             # Fallback to using fallback method
-#             return select_key("fallback", context, app)
-#
-#         service = "GlobalPlatformGUI"
-#         username = getpass.getuser()
-#         key = keyring.get_password(service, username)
-#
-#         if not key:
-#             # If no key in keyring, prompt for password via dialog
-#             key = app.prompt_for_password_dialog()
-#
-#             # Store the password in the keyring for future access
-#             keyring.set_password(service, username, key)
-#
-#         return hashlib.sha256(key.encode()).digest()
-#
-#     elif method == "gpg":
-#         gpg = gnupg.GPG()
-#         gpg_keys = gpg.list_keys()
-#
-#         gpg_options = {
-#             f"{x["keyid"]} ({x["uids"][0]})": {
-#                 "recipients": x["uids"],
-#                 "keyid": x["keyid"],
-#             }
-#             for x in gpg_keys
-#         }
-#
-#         def handle_accept(self, x):
-#             self.choice = x
-#
-#         choose_gpg_dialog = ComboDialog(
-#             window_title="GPG",
-#             combo_label="Choose a key",
-#             options=list(gpg_options.keys()),
-#             on_accept=handle_accept,
-#             on_cancel=lambda x: f"Canceled: {x}",
-#         )
-#         choose_gpg_dialog.exec_()
-#
-#         choice = choose_gpg_dialog.choice
-#         if choice is None:
-#             app.show_error_dialog("No choice found")
-#             return
-#
-#         gpg_context = gpg_options[choice]
-#         context = context | gpg_context
-#         gpg_keyid = gpg_context["keyid"]
-#         print(gpg_context)
-#         app.secure_storage_instance.initialize("gpg", gpg_keyid)
-#         try:
-#             app.secure_storage_instance.load()
-#         except Exception as e:
-#             print(f"select key: {e}")
-#             app.secure_storage_instance.set_data(DEFAULT_DATA_FILE)
-#
-#         data = app.secure_storage_instance.get_data()
-#         print("Default data")
-#         print(data)
-#         try:
-#             decrypted = subprocess.check_output(
-#                 [
-#                     "gpg",
-#                     "--decrypt",
-#                     "--quiet",
-#                     "--batch",
-#                     "--yes",
-#                     f"--recipient={gpg_id}",
-#                     "gpg.key",
-#                 ]
-#             )
-#             return hashlib.sha256(decrypted.strip()).digest()
-#         except Exception as e:
-#             return "GPG decryption failed:", e
-#
-#     elif method == "ykhmac":
-#         slot = input("Enter key slot (default: 2): ").strip() or "2"
-#         challenge = os.urandom(32)
-#         try:
-#             out = subprocess.check_output(
-#                 ["ykchalresp", f"-{slot}", base64.b16encode(challenge).decode()]
-#             )
-#             return hashlib.sha256(out.strip()).digest()
-#         except Exception as e:
-#             return "HMAC challenge failed:", e
-#
-#     else:
-#         return "Unknown encryption method."
 
 
 def select_gpg_key(context):
