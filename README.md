@@ -12,7 +12,7 @@ Looking for more information? Checkout the [flexSecure repo docs](https://github
 > <br />
 > Now that we got that over. The risk is no greater than using Global Platform Pro.
 > During every call to gp, this is app checks its config to see if the smart card
-> scanned is: A, has been scanned before, and B, has a default key. If either condition
+> scanned: A, has been scanned before, and B, has a default key. If either condition
 > is false, it bails. However, if you give it an incorrect key, it will send it. Enough
 > consecutive, incorrect key entries will brick your device.
 
@@ -50,7 +50,7 @@ Features:
 
 ## Forthcoming
 - [ ] Support for changing your key
-- [ ] Secure storage for keys and the like
+- [x] Secure storage for keys and the like
 - App Detail Pane
   - [x] Description
   - [ ] Version

@@ -48,7 +48,7 @@ class NFCHandlerThread(QThread):
     show_key_prompt_signal = pyqtSignal(str, str)
 
     # Known tag handling
-    known_tags_update_signal = pyqtSignal(str, bool)
+    known_tags_update_signal = pyqtSignal(str, str)
 
     get_key_signal = pyqtSignal(str)
     key_setter_signal = pyqtSignal(str)
@@ -155,7 +155,8 @@ class NFCHandlerThread(QThread):
                         self.status_update_signal.emit("No card present.")
 
                 self.msleep(timeout_duration)
-
+            # try:
+            #     pass
             except Exception as e:
                 self.error_signal.emit(f"NFC Thread Loop error: {e}")
 
@@ -232,6 +233,11 @@ class NFCHandlerThread(QThread):
 
     def update_memory(self):
         memory = get_memory()
+        if memory == -1:
+            self.storage["persistent"] = -1
+            self.storage["transient"] = -1
+            return
+
         free = memory["persistent"]["free"] / 1024
         t_free = (
             memory["transient"]["reset_free"] + memory["transient"]["deselect_free"]
@@ -243,15 +249,31 @@ class NFCHandlerThread(QThread):
     def get_memory_status(self):
         """Call measure.get_memory()."""
         if self.storage["persistent"] != -1 and self.storage["transient"] != -1:
-            # free = memory["persistent"]["free"] / 1024
-            # percent = memory["persistent"]["percent_free"] * 100
-            # t_free = (
-            #     memory["transient"]["reset_free"]
-            #     + memory["transient"]["deselect_free"]
-            # ) / 1024
             return f"> Free Memory > Persistent: {self.storage["persistent"]:.0f}kB / Transient: {self.storage["transient"]:.1f}kB"
         else:
             return "Javacard Memory not installed"
+
+    def run_gp(self, command: list[str], error_preface: str = "Error:"):
+        if not self.key:
+            return  # Protect unknown tags
+
+        result = subprocess.run(
+            [
+                *self.gp[os.name],
+                "-k",
+                self.key,
+                "-r",
+                self.selected_reader_name,
+                *command,
+            ],
+            capture_output=True,
+        )
+
+        if result.returncode == 0:
+            return result.stdout.decode()
+        else:
+            self.error_signal.emit(f"{error_preface} {result.stderr.decode()}")
+            return -1
 
     def get_installed_apps(self):
         """
@@ -263,24 +285,12 @@ class NFCHandlerThread(QThread):
             self.status_update_signal.emit("No reader selected for get_installed_apps.")
             return {}
 
-        if self.key is None:
-            return  # Protect unknown tags
         try:
-            cmd = [
-                *self.gp[os.name],
-                "-k",
-                self.key,
-                "--list",
-                "-r",
-                self.selected_reader_name,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                self.error_signal.emit(f"Unable to list apps: {result.stderr}")
-                # self.status_update.emit(f"Error listing apps: {result.stderr}")
+            result = self.run_gp(["--list"], "Unable to list apps:")
+            if result == -1:  # Error
                 return {}
 
-            lines = result.stdout.splitlines()
+            lines = result.splitlines()
 
             # Data structures for PKG -> version, applets, etc.
             pkg_app_versions = {}  # Maps "AID-of-Applet" -> "version"
@@ -446,7 +456,7 @@ class NFCHandlerThread(QThread):
                 ):
                     # Wrong key provided--don't do that again!
                     self.key = None
-                    self.known_tags_update_signal.emit(self.current_uid, False)
+                    self.known_tags_update_signal.emit(self.current_uid, "False")
                     self.error_signal.emit(
                         "Invalid key used: further attempts with invalid keys can brick the device!"
                     )
@@ -530,6 +540,19 @@ class NFCHandlerThread(QThread):
         if self.key is not None:
             self.get_installed_apps()
 
+    def change_key(self, new_key):
+        uid = self.current_uid
+
+        cmd = ["--keyset", "0", "--new-key", f"0x00:ALL={new_key}"]
+        result = self.run_gp(cmd, "Unable to change key:")
+
+        print(result)
+        if new_key != DEFAULT_KEY and self.app.config["known_tags"].get(uid):
+            self.known_tags_update_signal(uid, new_key)
+        if self.app.secure_storage:
+            # Add a new signal
+            pass
+
     def stop(self):
         """Signal the loop to exit gracefully."""
         self.running = False
@@ -592,9 +615,6 @@ def extract_manifest_from_cap(cap_file_path, output_dir=None):
                     with open(output_file_path, "w") as output_file:
                         output_file.write(manifest_content)
                     print(f"MANIFEST.MF extracted to {output_file_path}")
-
-                # Debug: Print manifest content to inspect structure
-                # print("Manifest Content:\n", manifest_content)
 
                 # Parse the manifest and extract all relevant fields
                 return parse_manifest(manifest_content)
