@@ -248,10 +248,10 @@ class NFCHandlerThread(QThread):
             self.storage["transient"] = -1
             return
 
-        free = memory["persistent"]["free"] / 1024
+        free = memory["persistent"]["free"]
         t_free = (
             memory["transient"]["reset_free"] + memory["transient"]["deselect_free"]
-        ) / 1024
+        )
 
         self.storage["persistent"] = free
         self.storage["transient"] = t_free
@@ -259,7 +259,7 @@ class NFCHandlerThread(QThread):
     def get_memory_status(self):
         """Call measure.get_memory()."""
         if self.storage["persistent"] != -1 and self.storage["transient"] != -1:
-            return f"> Free Memory > Persistent: {self.storage["persistent"]:.0f}kB / Transient: {self.storage["transient"]:.1f}kB"
+            return f"> Free Memory > Persistent: {self.storage["persistent"]/1024:.0f}kB / Transient: {self.storage["transient"]/1024:.1f}kB"
         else:
             return "> Javacard Memory not installed"
 
@@ -550,11 +550,12 @@ class NFCHandlerThread(QThread):
     def change_key(self, new_key):
         uid = self.current_uid
 
-        cmd = ["--lock", new_key]
+        if new_key == DEFAULT_KEY:
+            cmd = ["--unlock-card"]
+        else:
+            cmd = ["--lock", new_key]
         result = self.run_gp(cmd, "Unable to change key:")
 
-        print("change key result")
-        print(result)
         if result == -1:
             return
 
