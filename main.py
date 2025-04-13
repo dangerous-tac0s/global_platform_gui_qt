@@ -411,6 +411,7 @@ class GPManagerApp(QMainWindow):
                 self.nfc_thread.resume()
             else:
                 self.nfc_thread.pause()
+                time.sleep(0.15)
 
         super().changeEvent(event)
 
@@ -539,12 +540,22 @@ class GPManagerApp(QMainWindow):
         Force checking plugin resources for updates
         """
         self.message_queue.add_message("Update forced...")
-        if self.nfc_thread.current_uid:
-            self.message_queue.add_message("Forcing update on present tag...")
+        self.message_queue.add_message("Forcing update on present tag...")
+        while self.installed_list.count() > 0:
+            self.available_list.addItem(self.installed_list.takeItem(0))
+        self.installed_list.update()
+        self.available_list.update()
+        time.sleep(0.1)
+        if self.nfc_thread.isRunning():
+
             self.nfc_thread.current_uid = None
             self.nfc_thread.key = None
             self.nfc_thread.card_detected = False
             self.update_title_bar(self.nfc_thread.make_title_bar_string())
+        else:
+            self.nfc_thread.start()
+        # else:
+        #     print(self.nfc_thread)
         self.update_plugin_releases()
 
     def populate_available_list(self):
@@ -1126,7 +1137,10 @@ class GPManagerApp(QMainWindow):
         if result == 1:
             if self.secure_storage_dialog.method_selector.currentText() is not None:
                 # Load our file to make sure it works...
+                self.nfc_thread.pause()
+                time.sleep(0.15)
                 self.secure_storage_instance.load()
+                self.nfc_thread.resume()
             else:
                 self.secure_storage = None
         else:
@@ -1135,7 +1149,10 @@ class GPManagerApp(QMainWindow):
     def write_secure_storage(self):
         if not self.secure_storage_instance:
             return
+        self.nfc_thread.pause()
+        time.sleep(0.15)
         self.secure_storage_instance.save()
+        self.nfc_thread.resume()
 
     def load_config(self):
 

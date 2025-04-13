@@ -91,7 +91,7 @@ class NFCHandlerThread(QThread):
     def run(self):
         """Main loop for detecting readers/cards. (Unchanged from your existing version.)"""
         last_readers = []
-        timeout_duration = 250  # ms
+        timeout_duration = 100  # ms
 
         while not self._stop_event.is_set():
             self._pause_event.wait()  # Block here if paused
@@ -107,6 +107,7 @@ class NFCHandlerThread(QThread):
                 # No readers
                 if not reader_names:
                     if self.card_detected:
+                        self.key = None
                         self.card_detected = False
                         self.valid_card_detected = False
                         self.current_uid = None
@@ -144,6 +145,7 @@ class NFCHandlerThread(QThread):
 
                     else:
                         if self.card_detected:
+                            self.key = None
                             self.card_detected = False
                             self.valid_card_detected = False
                             self.current_uid = None
@@ -153,6 +155,7 @@ class NFCHandlerThread(QThread):
                             self.status_update_signal.emit("No card present.")
                 else:
                     if self.card_detected:
+                        self.key = None
                         self.card_detected = False
                         self.valid_card_detected = False
                         self.current_uid = None

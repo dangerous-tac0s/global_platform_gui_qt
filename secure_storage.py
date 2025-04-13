@@ -86,7 +86,6 @@ class SecureStorage:
         self.__data = initial_data
 
         self.save()
-        self.load()
 
     def change_method(self, new_method: str, new_key_id: str):
         if self.__data is None:
