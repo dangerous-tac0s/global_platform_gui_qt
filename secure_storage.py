@@ -23,11 +23,15 @@ class SecureStorage:
         self.__aes_key = None
         self.__method = None
         self.__key_id = None
-        self.__gpg = gnupg.GPG()
         self.__wrapped_key_b64 = None
         self.service_name = service_name
         self.__meta: None | dict = None
         self.__persist_key = False
+
+        try:
+            self.__gpg = gnupg.GPG()
+        except Exception:
+            self.__gpg = None
 
     @property
     def meta(self):
@@ -40,7 +44,7 @@ class SecureStorage:
                 raise RuntimeError("Key not found in keyring")
             return base64.b64decode(b64key)
 
-        elif self.__method == "gpg":
+        elif self.__method == "gpg" and self.__gpg:
             if not self.__wrapped_key_b64:
                 raise RuntimeError("No wrapped_key available for GPG")
             wrapped = base64.b64decode(self.__wrapped_key_b64)
@@ -65,8 +69,10 @@ class SecureStorage:
             keyring.set_password(
                 self.service_name, key_id, base64.b64encode(self.__aes_key).decode()
             )
-
-        elif method == "gpg":
+        elif not self.__gpg and method == "gpg":
+            # They don't have GPG
+            return self.initialize("keyring", initial_data=initial_data)
+        elif method == "gpg" and self.__gpg:
             if not key_id:
                 raise ValueError("GPG method requires key_id.")
 
@@ -107,7 +113,7 @@ class SecureStorage:
                 raise RuntimeError("Key not found in keyring")
             self.__aes_key = base64.b64decode(b64key)
 
-        elif self.__method == "gpg":
+        elif self.__method == "gpg" and self.__gpg:
             self.__wrapped_key_b64 = meta["wrapped_key_b64"]
             wrapped = base64.b64decode(meta["wrapped_key_b64"])
             try:
@@ -163,7 +169,7 @@ class SecureStorage:
             },
         }
 
-        if self.__method == "gpg":
+        if self.__method == "gpg" and self.__gpg:
             metadata["key_wrapping"]["wrapped_key_b64"] = self.__wrapped_key_b64
 
         with open(self.__path, "w") as f:

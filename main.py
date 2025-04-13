@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QDialogButtonBox,
 )
-from PyQt5.QtCore import QTimer, Qt, QSize
+from PyQt5.QtCore import QTimer, Qt, QSize, QEvent
 
 from dialogs.hex_input_dialog import HexInputDialog
 from file_thread import FileHandlerThread
@@ -399,6 +399,20 @@ class GPManagerApp(QMainWindow):
 
         if self.secure_storage:
             self.handle_tag_menu()
+
+    def changeEvent(self, event):
+        """
+        This exists because I have messed up twice now, forgetting to
+        close the app and doing gp/smart card stuff in another window
+        -- scary!
+        """
+        if event.type() == QEvent.ActivationChange:
+            if self.isActiveWindow():
+                self.nfc_thread.resume()
+            else:
+                self.nfc_thread.pause()
+
+        super().changeEvent(event)
 
     def handle_details_pane_back(self):
         # Remove the details pane
@@ -1080,6 +1094,13 @@ class GPManagerApp(QMainWindow):
             if self.secure_storage_instance.get_data():
                 self.secure_storage = self.secure_storage_instance.get_data()
             dialog.accept()
+
+        storage_methods = ["keyring", "gpg"]
+
+        try:
+            gpg = gnupg.GPG()
+        except Exception:
+            storage_methods = [x for x in storage_methods if x != "gpg"]
 
         dialog = QDialog(self)
         layout = QFormLayout()
