@@ -612,7 +612,7 @@ class GPManagerApp(QMainWindow):
                         "name": uid,
                         "key": self.nfc_thread.key,
                     }
-                    self.write_secure_storage()
+                    # self.write_secure_storage()
 
                 if self.nfc_thread.key is not None:
                     if (
@@ -621,7 +621,7 @@ class GPManagerApp(QMainWindow):
                         and not self.secure_storage["tags"][uid]["key"]
                     ):
                         self.secure_storage["tags"][uid]["key"] = self.nfc_thread.key
-                        self.write_secure_storage()
+                        # self.write_secure_storage()
 
                     self.install_button.setEnabled(True)
                     self.uninstall_button.setEnabled(True)
@@ -939,7 +939,7 @@ class GPManagerApp(QMainWindow):
                 if self.secure_storage["tags"].get(uid):
                     # Remove the naughty key
                     self.secure_storage["tags"][uid]["key"] = None
-                    self.write_secure_storage()
+                    # self.write_secure_storage()
             message = "Bad touch! Invalid key! Further attempts without a successful auth will brick the device!"
             QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
             self.prompt_for_key(uid, "")
@@ -1037,7 +1037,7 @@ class GPManagerApp(QMainWindow):
                 }
             # Process the tag name (store it, set it, etc.)
             self.secure_storage["tags"][self.nfc_thread.current_uid]["name"] = tag_name
-            self.write_secure_storage()
+            # self.write_secure_storage()
             self.update_title_bar(self.nfc_thread.make_title_bar_string())
 
     def set_tag_key(self):
@@ -1062,7 +1062,7 @@ class GPManagerApp(QMainWindow):
                 }
             self.secure_storage["tags"][uid]["key"] = tag_key
             self.config["known_tags"][uid] = DEFAULT_KEY == tag_key
-            self.write_secure_storage()
+            # self.write_secure_storage()
             self.write_config()
             self.nfc_thread.key = tag_key
             self.on_operation_complete(
@@ -1200,7 +1200,7 @@ class GPManagerApp(QMainWindow):
                     self.secure_storage["tags"][uid]["key"] = None
                 else:
                     self.secure_storage["tags"][uid]["key"] = default_key
-                self.write_secure_storage()
+                # self.write_secure_storage()
                 self.message_queue.add_message(
                     f"Updated {self.secure_storage["tags"][uid]["name"]} to known tags. Default key: {default_key}"
                 )
