@@ -63,6 +63,9 @@ class BaseAppletPlugin(ABC):
     def auto_import_plugins(cls, package, override_map):
         base_dir = os.path.dirname(__file__)  # Get directory of the current file
         this_dir = os.path.join(base_dir, "repos", package)
+        if not os.path.exists(this_dir):
+            this_dir = os.path.join(base_dir, "plugins", package)
+
         for fname in os.listdir(this_dir):
             if fname.endswith(".py") and not fname.startswith("__"):
                 mod_name = fname[:-3]  # Strip .py

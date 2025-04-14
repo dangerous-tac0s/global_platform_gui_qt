@@ -37,7 +37,6 @@ Features:
   - Permissions
   - Initial Record (Text and URI atm)
     - Not much in the way of validation/cleaning
-- Will probably break at random
 
 <img src="screenshot_key_prompt.png" width=350 /><br />
 
@@ -48,6 +47,7 @@ Features:
 <img src="screenshot_ndef.png" width=350/>
 
 ## Known Issues
+- Will probably break at random
 - No real validation URI record creation
 
 ## Forthcoming
@@ -65,7 +65,7 @@ Features:
   - [ ] Mime Records
 - [ ] Status.im support
 - [ ] cap file caching
-- [ ] 'Plugins' that don't require rebuilding if you're using a binary
+- [x] 'Plugins' that don't require rebuilding if you're using a binary
 - [ ] Exporting/backing up of app config, secure storage, and key if applicable
 
 ## Quick Start
@@ -92,3 +92,15 @@ Run
 ```bash
 python main.py
 ```
+
+## Building
+
+### Windows
+
+```bash
+pyinstaller windows.spec
+```
+
+### Others
+
+AppImage instructions Soon™

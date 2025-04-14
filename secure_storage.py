@@ -6,6 +6,7 @@ import subprocess
 
 import keyring
 import gnupg
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from secrets import token_bytes
 

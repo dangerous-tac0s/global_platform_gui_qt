@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
 )
 from PyQt5.QtCore import QTimer, Qt, QSize, QEvent
+from cryptography.exceptions import InvalidTag
 
 from dialogs.hex_input_dialog import HexInputDialog
 from file_thread import FileHandlerThread
@@ -115,37 +116,43 @@ def load_plugins():
     E.g. { "flexsecure_applets": <class FlexsecureAppletsPlugin>, ... }
     """
     plugin_map = {}
-    repos_dir = os.path.join(os.path.dirname(__file__), "repos")
-    if not os.path.isdir(repos_dir):
-        print("No /repos folder found, skipping plugin load.")
-        return plugin_map
+    repos_dir = os.path.join(os.path.dirname(__file__), "repos")  # included
+    plugins_dir = os.path.join(os.path.dirname(__file__), "plugins")
+    dir_to_name_map = {repos_dir: "repos", plugins_dir: "plugins"}
+    print(plugins_dir)
+    dirs = [repos_dir, plugins_dir]
 
-    for repo_name in os.listdir(repos_dir):
-        repo_path = os.path.join(repos_dir, repo_name)
-        if (
-            os.path.isdir(repo_path)
-            and not repo_name.startswith("__")
-            and not repo_name.startswith(".")
-        ):
-            # We check if there's an __init__.py in that folder
-            init_file = os.path.join(repo_path, "__init__.py")
-            if os.path.isfile(init_file):
-                # Attempt to import the repo as a package
-                mod_path = f"repos.{repo_name}"  # e.g. repos.flexsecure_applets
-                try:
-                    mod = importlib.import_module(mod_path)
-                    # find classes implementing BaseAppletPlugin
-                    for attr_name in dir(mod):
-                        attr = getattr(mod, attr_name)
-                        if (
-                            isinstance(attr, type)
-                            and issubclass(attr, BaseAppletPlugin)
-                            and attr is not BaseAppletPlugin
-                        ):
-                            instance = attr()
-                            plugin_map[instance.name] = attr
-                except Exception as e:
-                    print(f"Error importing {mod_path}: {e}")
+    for d in dirs:
+        if not os.path.isdir(d):
+            print(f"No /{dir_to_name_map[d]} folder found, skipping plugin load.")
+            return plugin_map
+
+        for repo_name in os.listdir(d):
+            repo_path = os.path.join(d, repo_name)
+            if (
+                os.path.isdir(repo_path)
+                and not repo_name.startswith("__")
+                and not repo_name.startswith(".")
+            ):
+                # We check if there's an __init__.py in that folder
+                init_file = os.path.join(repo_path, "__init__.py")
+                if os.path.isfile(init_file):
+                    # Attempt to import the repo as a package
+                    mod_path = f"{dir_to_name_map[d]}.{repo_name}"  # e.g. repos.flexsecure_applets
+                    try:
+                        mod = importlib.import_module(mod_path)
+                        # find classes implementing BaseAppletPlugin
+                        for attr_name in dir(mod):
+                            attr = getattr(mod, attr_name)
+                            if (
+                                isinstance(attr, type)
+                                and issubclass(attr, BaseAppletPlugin)
+                                and attr is not BaseAppletPlugin
+                            ):
+                                instance = attr()
+                                plugin_map[instance.name] = attr
+                    except Exception as e:
+                        print(f"Error importing {mod_path}: {e}")
     return plugin_map
 
 
@@ -180,6 +187,7 @@ if os.name == "nt":
 class GPManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.nfc_thread = None
         self.secure_storage = None
         self.secure_storage_instance = SecureStorage(
             DATA_FILE, service_name="GlobalPlatformGUI"
@@ -284,12 +292,14 @@ class GPManagerApp(QMainWindow):
 
         self.central_widget.setLayout(self.layout)
 
+        self.nfc_thread = None
+
         # Load secure storage
         if os.path.exists(DATA_FILE):
             try:
                 self.secure_storage_instance.load()
                 self.secure_storage = self.secure_storage_instance.get_data()
-            except RuntimeError:
+            except (InvalidTag, RuntimeError):
                 self.show_error_dialog("Secure storage not decrypted.")
                 self.secure_storage = None
 
@@ -717,9 +727,9 @@ class GPManagerApp(QMainWindow):
         if not selected:
             return
 
-        self.message_queue.add_message(f"Installing: {selected}")
-
         cap_name = selected[0].text()
+
+        self.message_queue.add_message(f"Installing: {cap_name}")
 
         # TODO: better mutual exclusivity testing. Without this, trying to install U2F
         #   with FIDO2 installed will result in an error and this app trying to do cleanup
@@ -1039,7 +1049,7 @@ class GPManagerApp(QMainWindow):
         tag_name, ok = QInputDialog.getText(
             self, "Set Tag Name", "Enter the tag name:", QLineEdit.Normal
         )
-        if ok and tag_name:
+        if ok and tag_name and self.nfc_thread:
             if not self.secure_storage["tags"].get(self.nfc_thread.current_uid):
                 self.secure_storage["tags"][self.nfc_thread.current_uid] = {
                     "name": self.nfc_thread.current_uid,
