@@ -133,6 +133,7 @@ class FlexsecureAppletsPlugin(BaseAppletPlugin):
 
     def __init__(self):
         super().__init__()
+        self.load_storage()
         self._selected_cap = None
         self._override_instance = None
         self.auto_import_plugins("flexsecure_applets", override_map)

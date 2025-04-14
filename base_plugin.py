@@ -83,7 +83,7 @@ class BaseAppletPlugin(ABC):
             ) as fh:
                 storage = json.load(fh)
                 fh.close()
-            self.storage = storage[self.release.replace("v", "")]
+                self.storage = storage[self.release.replace("v", "")] if storage else {}
 
     def set_cap_name(self, cap_name: str, override_map=None):
         """
@@ -108,7 +108,7 @@ class BaseAppletPlugin(ABC):
         self.load_storage()
 
     def get_descriptions(self) -> dict[str, str]:
-        pass
+        return {}
 
     def render_storage_req(self, storage_json: dict, cap_filename: str):
         if self.release is None:

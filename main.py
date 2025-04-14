@@ -337,6 +337,9 @@ class GPManagerApp(QMainWindow):
                     self.config["last_checked"][plugin_name] = {}
                     self.config["last_checked"][plugin_name]["apps"] = caps
                     self.config["last_checked"][plugin_name]["last"] = time.time()
+                    self.config["last_checked"][plugin_name][
+                        "release"
+                    ] = plugin_instance.release
 
                     self.write_config()
                 else:
@@ -1019,9 +1022,9 @@ class GPManagerApp(QMainWindow):
 
             if self.secure_storage is not None:
                 if not self.secure_storage["tags"].get(uid):
-                    self.secure_storage["tags"][uid] = {"name": uid, "key": res["key"]}
+                    self.secure_storage["tags"][uid] = {"name": uid, "key": res}
                 else:
-                    self.secure_storage["tags"][uid]["key"] = res["key"]
+                    self.secure_storage["tags"][uid]["key"] = res
 
             return res
 
@@ -1153,10 +1156,12 @@ class GPManagerApp(QMainWindow):
         if result == 1:
             if self.secure_storage_dialog.method_selector.currentText() is not None:
                 # Load our file to make sure it works...
-                self.nfc_thread.pause()
-                time.sleep(0.15)
+                if self.nfc_thread:
+                    self.nfc_thread.pause()
+                    time.sleep(0.15)
                 self.secure_storage_instance.load()
-                self.nfc_thread.resume()
+                if self.nfc_thread:
+                    self.nfc_thread.resume()
             else:
                 self.secure_storage = None
         else:
