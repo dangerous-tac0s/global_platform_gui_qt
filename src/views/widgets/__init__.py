@@ -1,0 +1,3 @@
+"""
+Reusable Qt widget components.
+"""

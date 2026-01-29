@@ -10,7 +10,9 @@ def get_memory(reader=0, retry=0):
     Returns a dict of the memory values
     :return:
     """
-    reader_list = readers()
+    all_readers = readers()
+    # Filter out SAM readers - we only want PICC (contactless card) readers
+    reader_list = [r for r in all_readers if "SAM" not in str(r).upper()]
     if len(reader_list) > 0:
         try:
             connection = reader_list[reader].createConnection()
