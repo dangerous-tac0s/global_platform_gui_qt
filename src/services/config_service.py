@@ -123,8 +123,7 @@ class ConfigService:
         """
         migrations = {
             0: self._migrate_v0_to_v1,
-            # Add future migrations here:
-            # 1: self._migrate_v1_to_v2,
+            1: self._migrate_v1_to_v2,
         }
 
         current = dict(data)
@@ -162,6 +161,42 @@ class ConfigService:
                 result["window"]["width"] = 800
             if "height" not in result["window"]:
                 result["window"]["height"] = 600
+
+        return result
+
+    def _migrate_v1_to_v2(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Migrate from v1 (UID-based) to v2 (CPLC-based card identification).
+
+        Converts known_tags entries to known_cards format:
+        - Each UID becomes a CardConfigEntry with the UID as both key and uid field
+        - Entries are marked as migrated_from_uid=True for later CPLC upgrade
+        - known_tags is preserved for rollback safety
+
+        NEVER removes keys - only adds or transforms.
+        """
+        result = dict(data)
+
+        known_tags = result.get("known_tags", {})
+        known_cards: Dict[str, Dict[str, Any]] = result.get("known_cards", {})
+
+        # Convert each known_tags entry to known_cards format
+        for uid, uses_default_key in known_tags.items():
+            normalized_uid = uid.upper().replace(" ", "")
+
+            # Skip if already migrated
+            if normalized_uid in known_cards:
+                continue
+
+            known_cards[normalized_uid] = {
+                "uses_default_key": uses_default_key,
+                "uid": normalized_uid,
+                "cplc_hash": None,
+                "migrated_from_uid": True,
+            }
+
+        result["known_cards"] = known_cards
+        # Keep known_tags for rollback safety (don't delete)
 
         return result
 

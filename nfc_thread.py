@@ -13,6 +13,9 @@ from smartcard.Exceptions import NoCardException, CardConnectionException
 from smartcard.util import toHexString
 from measure import get_memory
 
+from src.models.card import CardIdentifier
+from src.services.gp_service import GPService
+
 # TODO: Handle alternative keys
 DEFAULT_KEY = "404142434445464748494A4B4C4D4E4F"
 
@@ -55,6 +58,9 @@ class NFCHandlerThread(QThread):
     get_key_signal = pyqtSignal(str)
     key_setter_signal = pyqtSignal(str)
 
+    # Emitted when CPLC data is retrieved for a card (card_id, cplc_hash)
+    cplc_retrieved_signal = pyqtSignal(str, str)
+
     def __init__(self, app, selected_reader_name=None, parent=None):
         """
         :param selected_reader_name: The currently chosen reader (or None at start).
@@ -77,7 +83,12 @@ class NFCHandlerThread(QThread):
         self.card_detected = False
         self.valid_card_detected = False
         self.current_uid = None
+        self.current_identifier: CardIdentifier | None = None  # CPLC + UID composite
+        self._last_effective_uid: str | None = None  # For detecting card changes
         self.storage: dict[str, int] = {"persistent": -1, "transient": -1}
+
+        # GPService for CPLC retrieval
+        self._gp_service = GPService()
 
         # OS-specific gp command
         self.gp = {
@@ -120,6 +131,8 @@ class NFCHandlerThread(QThread):
                         self.card_detected = False
                         self.valid_card_detected = False
                         self.current_uid = None
+                        self.current_identifier = None
+                        self._last_effective_uid = None
                         self.storage["persistent"] = -1
                         self.storage["transient"] = -1
                         self.card_present_signal.emit(False)
@@ -131,16 +144,54 @@ class NFCHandlerThread(QThread):
                 if self.selected_reader_name in reader_names:
                     idx = reader_names.index(self.selected_reader_name)
                     reader = available_readers[idx]
-                    uid = self.get_card_uid(reader)
 
-                    # There's a tag present
-                    if uid:
-                        if not self.card_detected or uid != self.current_uid:
+                    # Check card presence first (works for both contact and contactless)
+                    card_present = self.is_card_present(reader)
+
+                    # Try to get UID (only works for contactless)
+                    uid = self.get_card_uid(reader) if card_present else None
+
+                    # There's a card present
+                    if card_present:
+                        # Determine if this is a new card detection
+                        # Use UID for initial detection check (quick, no subprocess)
+                        temp_uid = uid or "__CONTACT_CARD__"
+                        is_new_card = not self.card_detected or temp_uid != self.current_uid
+
+                        if is_new_card:
+                            # Only retrieve CPLC once when card is first detected
+                            self.status_update_signal.emit("Retrieving card identifier...")
+                            cplc_data = self._gp_service.get_cplc_data_no_auth(self.selected_reader_name)
+                            cplc_hash = cplc_data.compute_hash() if cplc_data else None
+
+                            if cplc_hash:
+                                self.status_update_signal.emit(f"Card ID: {cplc_hash}")
+                            elif uid:
+                                self.status_update_signal.emit(f"Card UID: {uid}")
+                            else:
+                                self.status_update_signal.emit("No card identifier available (CPLC retrieval failed)")
+
+                            # Create identifier with CPLC (preferred) or UID (fallback)
+                            if cplc_hash or uid:
+                                self.current_identifier = CardIdentifier(
+                                    cplc_hash=cplc_hash,
+                                    uid=uid  # Real UID (None for contact cards)
+                                )
+                                effective_uid = cplc_hash or uid
+                            else:
+                                # No identifier available at all
+                                self.current_identifier = None
+                                effective_uid = "__CONTACT_CARD__"
+
+                            # Store the actual UID for reference (not the CPLC)
+                            self.current_uid = uid or "__CONTACT_CARD__"
+                            self._last_effective_uid = effective_uid
+
+                        if is_new_card:
                             # TODO: is_jcop migration fixes
                             jcop3 = self.is_jcop()
                             self.valid_card_detected = jcop3
                             self.card_detected = True
-                            self.current_uid = uid
                             self.card_present_signal.emit(True)
                             if jcop3:
                                 self.update_memory(idx)
@@ -158,6 +209,8 @@ class NFCHandlerThread(QThread):
                             self.card_detected = False
                             self.valid_card_detected = False
                             self.current_uid = None
+                            self.current_identifier = None
+                            self._last_effective_uid = None
                             self.storage["persistent"] = -1
                             self.storage["transient"] = -1
                             self.card_present_signal.emit(False)
@@ -168,6 +221,8 @@ class NFCHandlerThread(QThread):
                         self.card_detected = False
                         self.valid_card_detected = False
                         self.current_uid = None
+                        self.current_identifier = None
+                        self._last_effective_uid = None
                         self.storage["persistent"] = -1
                         self.storage["transient"] = -1
                         self.card_present_signal.emit(False)
@@ -184,18 +239,64 @@ class NFCHandlerThread(QThread):
         self.running = False
 
     def make_title_bar_string(self):
+        # Use card_id property which prefers CPLC over UID
+        raw_card_id = self.card_id
         uid = self.current_uid
         message = ""
 
-        if uid is None:
+        # Check if this is a contact card placeholder
+        is_contact_placeholder = uid == "__CONTACT_CARD__"
+
+        # Don't use the placeholder as a real card_id
+        card_id = raw_card_id if raw_card_id != "__CONTACT_CARD__" else None
+
+        # Also get CPLC hash directly from identifier (even if card_id is UID due to CPLC failure)
+        cplc_hash = None
+        if self.current_identifier and self.current_identifier.cplc_hash:
+            cplc_hash = self.current_identifier.cplc_hash
+
+        if not card_id and not cplc_hash and (uid is None or is_contact_placeholder):
+            if self.card_detected:
+                return "Global Platform GUI > Contact Card (authenticating...)"
             return "Global Platform GUI"
 
-        elif self.app.secure_storage is not None and self.app.secure_storage[
-            "tags"
-        ].get(uid):
-            message += self.app.secure_storage["tags"][uid]["name"]
-        else:
-            message += uid
+        # Try to find name from storage using multiple lookup strategies
+        display_name = None
+        display_card_id = card_id  # What to show if no name found
+        if self.app.secure_storage is not None:
+            tags = self.app.secure_storage["tags"]
+
+            # Strategy 1: Look up by CPLC hash (if available)
+            if not display_name and cplc_hash and tags.get(cplc_hash):
+                stored_name = tags[cplc_hash].get("name")
+                if stored_name and stored_name != "__CONTACT_CARD__":
+                    display_name = stored_name
+                    display_card_id = cplc_hash
+
+            # Strategy 2: Look up by card_id (could be CPLC or UID)
+            if not display_name and card_id and tags.get(card_id):
+                stored_name = tags[card_id].get("name")
+                if stored_name and stored_name != "__CONTACT_CARD__":
+                    display_name = stored_name
+
+            # Strategy 3: Look up by UID (fallback for contactless)
+            if not display_name and uid and not is_contact_placeholder and tags.get(uid):
+                stored_name = tags[uid].get("name")
+                if stored_name and stored_name != "__CONTACT_CARD__":
+                    display_name = stored_name
+
+            # Strategy 4: Search all entries for matching UID field (for CPLC-keyed entries)
+            if not display_name and uid and not is_contact_placeholder:
+                for key, entry in tags.items():
+                    if entry.get("uid") == uid:
+                        stored_name = entry.get("name")
+                        if stored_name and stored_name != "__CONTACT_CARD__":
+                            display_name = stored_name
+                            display_card_id = key  # Use the actual storage key
+                            break
+
+        # Use display_name if found, otherwise card_id/CPLC hash, otherwise "Contact Card"
+        message += display_name or display_card_id or cplc_hash or "Contact Card"
 
         message += " " + self.get_memory_status()
 
@@ -204,8 +305,30 @@ class NFCHandlerThread(QThread):
     # --------------------------
     #  Card / GP utility methods
     # --------------------------
+    def is_card_present(self, reader) -> bool:
+        """
+        Check if a card is present by attempting to connect.
+
+        Works for both contact and contactless interfaces.
+        Returns True if a card is present and can be connected to.
+        """
+        try:
+            connection = reader.createConnection()
+            connection.connect()
+            connection.disconnect()
+            return True
+        except (NoCardException, CardConnectionException):
+            return False
+        except Exception:
+            return False
+
     def get_card_uid(self, reader):
-        """Retrieve card UID with [FF CA 00 00 00]."""
+        """
+        Retrieve card UID with [FF CA 00 00 00].
+
+        Note: This only works for contactless interfaces. Contact interfaces
+        will return None even when a card is present.
+        """
         try:
             GET_UID = [0xFF, 0xCA, 0x00, 0x00, 0x00]
             connection = reader.createConnection()
@@ -261,6 +384,58 @@ class NFCHandlerThread(QThread):
             return "JavaCard v3" in result.stdout
         except Exception as e:
             return False
+
+    def retrieve_cplc_and_update_identifier(self):
+        """
+        Attempt to retrieve CPLC data and update the current card identifier.
+
+        Called after authentication is successful. Creates a CardIdentifier
+        with both CPLC hash (if available) and UID.
+        """
+        if not self.key or not self.selected_reader_name:
+            return
+
+        # Get the real UID (not the placeholder)
+        real_uid = self.current_uid if self.current_uid != "__CONTACT_CARD__" else None
+
+        try:
+            cplc_data = self._gp_service.get_cplc_data(
+                self.selected_reader_name,
+                self.key
+            )
+
+            if cplc_data:
+                cplc_hash = cplc_data.compute_hash()
+                self.current_identifier = CardIdentifier(
+                    cplc_hash=cplc_hash,
+                    uid=real_uid  # Use real UID, not placeholder
+                )
+                # Emit signal for storage upgrade if needed (only if we have a real UID)
+                # For contact cards (no UID), just pass empty string
+                self.cplc_retrieved_signal.emit(real_uid or "", cplc_hash)
+
+                # Update title bar now that we have CPLC
+                self.title_bar_signal.emit(self.make_title_bar_string())
+            else:
+                # CPLC not available, use UID-only identifier (only if real UID exists)
+                if real_uid:
+                    self.current_identifier = CardIdentifier(uid=real_uid)
+                else:
+                    self.current_identifier = None
+
+        except Exception as e:
+            # CPLC retrieval failed, fall back to UID-only
+            if real_uid:
+                self.current_identifier = CardIdentifier(uid=real_uid)
+            else:
+                self.current_identifier = None
+
+    @property
+    def card_id(self) -> str | None:
+        """Get the primary card identifier (CPLC preferred, UID fallback)."""
+        if self.current_identifier:
+            return self.current_identifier.primary_id
+        return self.current_uid
 
     def update_memory(self, reader_idx=0):
         memory = get_memory(reader=reader_idx)
@@ -529,7 +704,10 @@ class NFCHandlerThread(QThread):
                 ):
                     # Wrong key provided--don't do that again!
                     self.key = None
-                    self.known_tags_update_signal.emit(self.current_uid, "False")
+                    # Use card_id (CPLC preferred) for storage key
+                    storage_key = self.card_id if self.card_id != "__CONTACT_CARD__" else None
+                    if storage_key:
+                        self.known_tags_update_signal.emit(storage_key, "False")
                     self.error_signal.emit(
                         "Invalid key used: further attempts with invalid keys can brick the device!"
                     )
@@ -608,7 +786,13 @@ class NFCHandlerThread(QThread):
             self.resume()
 
     def get_key(self):
-        self.get_key_signal.emit(self.current_uid)
+        # Use card_id (CPLC preferred) if available, otherwise UID
+        # Now that we get CPLC first, this should always have the CPLC hash
+        card_id = self.card_id
+        # Filter out placeholder
+        if card_id == "__CONTACT_CARD__":
+            card_id = None
+        self.get_key_signal.emit(card_id)
 
     @pyqtSlot(str)
     def key_setter(self, key):
@@ -618,11 +802,20 @@ class NFCHandlerThread(QThread):
         """
         self.key = key
         if self.key is not None:
-            # This is called from UI thread, so we need to pause the NFC thread
+            # Emit signal to store key under CPLC (identifier already set during detection)
+            if self.current_identifier and self.current_identifier.cplc_hash:
+                real_uid = self.current_uid if self.current_uid != "__CONTACT_CARD__" else None
+                self.cplc_retrieved_signal.emit(real_uid or "", self.current_identifier.cplc_hash)
+
+            # Update title bar now that we have the key
+            self.title_bar_signal.emit(self.make_title_bar_string())
+
+            # Get installed apps
             self.get_installed_apps(_internal=False)
 
     def change_key(self, new_key):
-        uid = self.current_uid
+        # Use card_id (CPLC preferred) for storage key
+        storage_key = self.card_id if self.card_id != "__CONTACT_CARD__" else None
 
         if new_key == DEFAULT_KEY:
             cmd = ["--unlock-card"]
@@ -633,7 +826,8 @@ class NFCHandlerThread(QThread):
         if result == -1:
             return
 
-        self.known_tags_update_signal.emit(uid, new_key)
+        if storage_key:
+            self.known_tags_update_signal.emit(storage_key, new_key)
 
     def pause(self):
         self._pause_event.clear()

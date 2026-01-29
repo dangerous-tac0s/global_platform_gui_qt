@@ -3,9 +3,11 @@ StorageService - Secure encrypted storage for card keys and metadata.
 
 This wraps the existing SecureStorage class to provide a clean interface
 for dependency injection and testing.
+
+Supports dual-lookup by CardIdentifier (CPLC hash preferred, UID fallback).
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 import sys
 import os
 
@@ -16,6 +18,9 @@ try:
     from secure_storage import SecureStorage as LegacySecureStorage
 except ImportError:
     LegacySecureStorage = None
+
+if TYPE_CHECKING:
+    from ..models.card import CardIdentifier
 
 
 class StorageService:
@@ -202,6 +207,187 @@ class StorageService:
             self.save()
             return True
         return False
+
+    # === CPLC-aware dual-lookup methods ===
+
+    def get_key_for_card(self, identifier: "CardIdentifier") -> Optional[str]:
+        """
+        Get the stored key for a card using CardIdentifier.
+
+        Tries CPLC hash first, then falls back to UID lookup.
+
+        Args:
+            identifier: CardIdentifier with cplc_hash and/or uid
+
+        Returns:
+            Key as hex string, or None if not stored
+        """
+        data = self.load()
+        tags = data.get("tags", {})
+
+        # Try CPLC hash first
+        if identifier.cplc_hash:
+            cplc_normalized = identifier.cplc_hash.upper()
+            if cplc_normalized in tags:
+                tag_data = tags[cplc_normalized]
+                if tag_data and "key" in tag_data:
+                    return tag_data["key"]
+
+        # Fall back to UID
+        if identifier.uid:
+            uid_normalized = identifier.uid.upper().replace(" ", "")
+            if uid_normalized in tags:
+                tag_data = tags[uid_normalized]
+                if tag_data and "key" in tag_data:
+                    return tag_data["key"]
+
+        return None
+
+    def get_name_for_card(self, identifier: "CardIdentifier") -> Optional[str]:
+        """
+        Get the friendly name for a card using CardIdentifier.
+
+        Tries CPLC hash first, then falls back to UID lookup.
+
+        Args:
+            identifier: CardIdentifier with cplc_hash and/or uid
+
+        Returns:
+            Friendly name string, or None if not stored
+        """
+        data = self.load()
+        tags = data.get("tags", {})
+
+        # Try CPLC hash first
+        if identifier.cplc_hash:
+            cplc_normalized = identifier.cplc_hash.upper()
+            if cplc_normalized in tags:
+                tag_data = tags[cplc_normalized]
+                if tag_data and "name" in tag_data:
+                    return tag_data["name"]
+
+        # Fall back to UID
+        if identifier.uid:
+            uid_normalized = identifier.uid.upper().replace(" ", "")
+            if uid_normalized in tags:
+                tag_data = tags[uid_normalized]
+                if tag_data and "name" in tag_data:
+                    return tag_data["name"]
+
+        return None
+
+    def set_key_for_card(
+        self,
+        identifier: "CardIdentifier",
+        key: Optional[str],
+        name: Optional[str] = None,
+    ) -> None:
+        """
+        Store a key for a card using CardIdentifier.
+
+        Uses CPLC hash as primary key if available, otherwise uses UID.
+
+        Args:
+            identifier: CardIdentifier with cplc_hash and/or uid
+            key: Key as hex string (or None to clear)
+            name: Optional friendly name for the card
+        """
+        data = self.load()
+
+        if "tags" not in data:
+            data["tags"] = {}
+
+        # Determine primary key (CPLC preferred)
+        if identifier.cplc_hash:
+            primary_key = identifier.cplc_hash.upper()
+        elif identifier.uid:
+            primary_key = identifier.uid.upper().replace(" ", "")
+        else:
+            return  # No identifier available
+
+        if primary_key not in data["tags"]:
+            data["tags"][primary_key] = {}
+
+        data["tags"][primary_key]["key"] = key
+
+        # Store UID as reference if we're using CPLC
+        if identifier.cplc_hash and identifier.uid:
+            data["tags"][primary_key]["uid"] = identifier.uid.upper().replace(" ", "")
+
+        if name is not None:
+            data["tags"][primary_key]["name"] = name
+
+        self._data = data
+        self.save()
+
+    def upgrade_to_cplc(self, old_uid: str, cplc_hash: str) -> bool:
+        """
+        Migrate a UID-based entry to use CPLC as primary key.
+
+        This is called when we first obtain CPLC data for a known card.
+        Creates a new entry with CPLC key, preserves all data, and removes
+        the old UID-keyed entry.
+
+        Args:
+            old_uid: Original UID used as key
+            cplc_hash: New CPLC-based identifier (format: "CPLC_...")
+
+        Returns:
+            True if upgrade was performed, False if UID entry not found
+        """
+        data = self.load()
+        tags = data.get("tags", {})
+
+        uid_normalized = old_uid.upper().replace(" ", "")
+        cplc_normalized = cplc_hash.upper()
+
+        if uid_normalized not in tags:
+            return False
+
+        # Get existing entry data
+        old_entry = tags[uid_normalized]
+
+        # Create new entry with CPLC key
+        new_entry = dict(old_entry)
+        new_entry["uid"] = uid_normalized  # Preserve UID as reference
+        new_entry["migrated_from_uid"] = True
+
+        # Add new CPLC-keyed entry
+        tags[cplc_normalized] = new_entry
+
+        # Remove old UID-keyed entry
+        del tags[uid_normalized]
+
+        self._data = data
+        self.save()
+        return True
+
+    def find_by_uid(self, uid: str) -> Optional[str]:
+        """
+        Find the primary key (storage key) for a card by its UID.
+
+        Useful when a card is detected by UID but may be stored under CPLC.
+
+        Args:
+            uid: Card UID to search for
+
+        Returns:
+            The storage key (CPLC hash or UID) if found, None otherwise
+        """
+        data = self.load()
+        tags = data.get("tags", {})
+        uid_normalized = uid.upper().replace(" ", "")
+
+        # Direct UID key lookup
+        if uid_normalized in tags:
+            return uid_normalized
+
+        # Search for UID in entry data (for CPLC-keyed entries)
+        for key, entry in tags.items():
+            if entry.get("uid") == uid_normalized:
+                return key
+
+        return None
 
 
 class MockStorageService(StorageService):

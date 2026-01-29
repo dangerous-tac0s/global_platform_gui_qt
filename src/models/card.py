@@ -2,9 +2,10 @@
 Card-related models for representing smartcard state and information.
 """
 
+import hashlib
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Dict
+from typing import Optional, Dict, Union
 
 
 class CardConnectionState(Enum):
@@ -16,16 +17,82 @@ class CardConnectionState(Enum):
 
 
 @dataclass
+class CardIdentifier:
+    """
+    Unique card identifier supporting both CPLC-based and UID-based identification.
+
+    CPLC (Card Production Life Cycle) data provides a universal identifier that works
+    across both contact and contactless interfaces. UID is used as a fallback for
+    contactless-only scenarios or when CPLC is unavailable.
+
+    Primary: CPLC hash (format: "CPLC_" + 16 hex chars)
+    Fallback: UID (typically 8-14 hex chars)
+    """
+    cplc_hash: Optional[str] = None
+    uid: Optional[str] = None
+
+    def __post_init__(self):
+        if self.cplc_hash:
+            self.cplc_hash = self.cplc_hash.upper()
+        if self.uid:
+            self.uid = self.uid.upper().replace(" ", "")
+
+    @property
+    def primary_id(self) -> str:
+        """Get the primary identifier (CPLC hash if available, else UID)."""
+        return self.cplc_hash or self.uid or ""
+
+    @property
+    def is_cplc_based(self) -> bool:
+        """Check if using CPLC-based identification."""
+        return self.cplc_hash is not None
+
+    def matches(self, other: "CardIdentifier") -> bool:
+        """
+        Check if two identifiers refer to the same card.
+
+        CPLC comparison takes precedence when both have CPLC hashes.
+        Falls back to UID comparison when CPLC is not available.
+        """
+        if self.cplc_hash and other.cplc_hash:
+            return self.cplc_hash == other.cplc_hash
+        if self.uid and other.uid:
+            return self.uid == other.uid
+        return False
+
+    @staticmethod
+    def compute_cplc_hash(raw_cplc_hex: str) -> str:
+        """
+        Compute the CPLC-based identifier from raw CPLC hex data.
+
+        Returns format: "CPLC_" + first 16 hex chars of SHA-256 hash.
+        """
+        h = hashlib.sha256(raw_cplc_hex.upper().encode()).hexdigest()
+        return f"CPLC_{h[:16].upper()}"
+
+
+@dataclass
 class CardInfo:
     """Information about a connected smartcard."""
-    uid: str
+    identifier: Union[CardIdentifier, str]
     is_jcop: bool = False
     jcop_version: Optional[tuple] = None  # (major, minor, patch)
     atr: Optional[str] = None
 
     def __post_init__(self):
-        # Normalize UID to uppercase without spaces
-        self.uid = self.uid.upper().replace(" ", "")
+        # Handle legacy construction with just a UID string
+        if isinstance(self.identifier, str):
+            self.identifier = CardIdentifier(uid=self.identifier)
+
+    @property
+    def uid(self) -> str:
+        """Legacy property for backwards compatibility. Returns UID if available."""
+        return self.identifier.uid or self.identifier.primary_id
+
+    @property
+    def card_id(self) -> str:
+        """Get the primary card identifier (CPLC preferred, UID fallback)."""
+        return self.identifier.primary_id
 
 
 @dataclass
@@ -97,8 +164,18 @@ class CardState:
 
     @property
     def uid(self) -> Optional[str]:
-        """Get card UID if available."""
+        """Get card UID if available (legacy property)."""
         return self.info.uid if self.info else None
+
+    @property
+    def card_id(self) -> Optional[str]:
+        """Get the primary card identifier (CPLC preferred, UID fallback)."""
+        return self.info.card_id if self.info else None
+
+    @property
+    def identifier(self) -> Optional[CardIdentifier]:
+        """Get the full CardIdentifier if available."""
+        return self.info.identifier if self.info else None
 
     def has_applet(self, aid: str) -> bool:
         """Check if an applet with given AID is installed."""

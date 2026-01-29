@@ -5,8 +5,12 @@ This service handles low-level smartcard operations like
 detecting readers, connecting to cards, and transmitting APDUs.
 """
 
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from .gp_service import GPService, CPLCData
+    from ..models.card import CardIdentifier
 
 
 @dataclass
@@ -257,6 +261,45 @@ class CardService:
 
         return self.transmit_apdu(apdu)
 
+    def get_card_identifier(
+        self,
+        gp_service: "GPService",
+        reader: str,
+        key: str,
+    ) -> Optional["CardIdentifier"]:
+        """
+        Get a CardIdentifier combining UID and CPLC data.
+
+        Attempts to retrieve both UID (contactless) and CPLC (universal)
+        to create a composite identifier.
+
+        Args:
+            gp_service: GPService instance for CPLC retrieval
+            reader: Reader name
+            key: Card master key
+
+        Returns:
+            CardIdentifier with available identifiers, or None if card not present
+        """
+        from ..models.card import CardIdentifier
+
+        # Get UID first (works contactless)
+        uid = self.get_card_uid(reader)
+
+        # Attempt CPLC retrieval
+        cplc_hash = None
+        try:
+            cplc_data = gp_service.get_cplc_data(reader, key)
+            if cplc_data:
+                cplc_hash = cplc_data.compute_hash()
+        except Exception:
+            pass  # CPLC not available, will use UID only
+
+        if not uid and not cplc_hash:
+            return None
+
+        return CardIdentifier(cplc_hash=cplc_hash, uid=uid)
+
 
 class MockCardService(CardService):
     """
@@ -323,3 +366,24 @@ class MockCardService(CardService):
 
         # Default success response
         return APDUResponse(data=[], sw1=0x90, sw2=0x00)
+
+    def set_mock_cplc_hash(self, cplc_hash: Optional[str]) -> None:
+        """Set the mock CPLC hash for testing."""
+        self._mock_cplc_hash = cplc_hash
+
+    def get_card_identifier(
+        self,
+        gp_service: "GPService",
+        reader: str,
+        key: str,
+    ) -> Optional["CardIdentifier"]:
+        """Mock implementation that returns identifier based on mock settings."""
+        from ..models.card import CardIdentifier
+
+        cplc_hash = getattr(self, '_mock_cplc_hash', None)
+        uid = self._mock_uid
+
+        if not uid and not cplc_hash:
+            return None
+
+        return CardIdentifier(cplc_hash=cplc_hash, uid=uid)

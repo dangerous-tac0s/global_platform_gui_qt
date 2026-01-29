@@ -408,6 +408,7 @@ class GPManagerApp(QMainWindow):
         self.nfc_thread.show_key_prompt_signal.connect(self.prompt_for_key)
         self.nfc_thread.get_key_signal.connect(self.get_key)
         self.nfc_thread.key_setter_signal.connect(self.nfc_thread.key_setter)
+        self.nfc_thread.cplc_retrieved_signal.connect(self.on_cplc_retrieved)
 
         # Initially disable install/uninstall
         self.install_button.setEnabled(False)
@@ -979,29 +980,45 @@ class GPManagerApp(QMainWindow):
         else:
             QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
 
-    def get_key(self, uid):
+    def get_key(self, card_id):
         """
         Get the key for the user's smart card.
         - Have we seen the tag before?
         - If so, did it have a default key?
+
+        Note: card_id may be None or "__CONTACT_CARD__" for contact cards
+        on initial detection. In that case, we prompt for key and store
+        it after CPLC retrieval.
         """
         key = None
-        if self.secure_storage is not None:
-            if self.secure_storage["tags"].get(uid):
-                key = self.secure_storage["tags"][uid]["key"]
-        if key is None:
-            is_default_key = self.config["known_tags"].get(uid, None)
-            if is_default_key:
-                key = DEFAULT_KEY
 
-        if key is None:
-            res = self.prompt_for_key(uid)
-
+        # For contact cards without initial ID, still prompt for key
+        # __CONTACT_CARD__ is a placeholder for contact interfaces
+        is_contact_placeholder = card_id is None or card_id == "__CONTACT_CARD__"
+        if is_contact_placeholder:
+            res = self.prompt_for_key(None)
             if not res:
                 self.show_error_dialog("No key found.")
                 return
-
             key = res
+        else:
+            # Normal flow - try to find stored key
+            if self.secure_storage is not None:
+                if self.secure_storage["tags"].get(card_id):
+                    key = self.secure_storage["tags"][card_id]["key"]
+            if key is None:
+                is_default_key = self.config["known_tags"].get(card_id, None)
+                if is_default_key:
+                    key = DEFAULT_KEY
+
+            if key is None:
+                res = self.prompt_for_key(card_id)
+
+                if not res:
+                    self.show_error_dialog("No key found.")
+                    return
+
+                key = res
 
         self.nfc_thread.key_setter_signal.emit(key)
         self.nfc_thread.status_update_signal.emit("Key set.")
@@ -1009,11 +1026,19 @@ class GPManagerApp(QMainWindow):
 
     def prompt_for_key(self, uid: str, existing_key: str = None):
         """
-        Prompts the user to enter their smart card's key
+        Prompts the user to enter their smart card's key.
+
+        Note: uid may be None or "__CONTACT_CARD__" for contact cards on
+        initial detection. In that case, we just return the key - storage
+        will happen after CPLC retrieval via on_cplc_retrieved().
         """
-        is_new = self.config["known_tags"].get(uid, False) != False
+        # Treat __CONTACT_CARD__ placeholder as no UID
+        is_contact_placeholder = uid is None or uid == "__CONTACT_CARD__"
+        is_new = not is_contact_placeholder and self.config["known_tags"].get(uid, False) != False
         title = ""
-        if is_new:
+        if is_contact_placeholder:
+            title = "Contact Card: "
+        elif is_new:
             title = "New Tag: "
         if not existing_key:
             existing_key = DEFAULT_KEY
@@ -1028,13 +1053,16 @@ class GPManagerApp(QMainWindow):
         if dialog.exec_():  # Show dialog and wait for user action
             res = dialog.get_results()
 
-            self.update_known_tags(uid, res)
+            # Only store immediately if we have a valid uid
+            # For contact cards (placeholder), storage happens after CPLC retrieval
+            if not is_contact_placeholder:
+                self.update_known_tags(uid, res)
 
-            if self.secure_storage is not None:
-                if not self.secure_storage["tags"].get(uid):
-                    self.secure_storage["tags"][uid] = {"name": uid, "key": res}
-                else:
-                    self.secure_storage["tags"][uid]["key"] = res
+                if self.secure_storage is not None:
+                    if not self.secure_storage["tags"].get(uid):
+                        self.secure_storage["tags"][uid] = {"name": uid, "key": res}
+                    else:
+                        self.secure_storage["tags"][uid]["key"] = res
 
             return res
 
@@ -1044,23 +1072,126 @@ class GPManagerApp(QMainWindow):
         else:
             self.setWindowTitle(APP_TITLE)
 
+    def on_cplc_retrieved(self, uid: str, cplc_hash: str):
+        """
+        Called when CPLC data is retrieved for a card.
+
+        This handles:
+        1. Upgrading UID-based storage entries to use CPLC as primary key
+        2. For contact cards (uid may be empty), storing key under CPLC identifier
+        3. Merging data when both UID and CPLC entries exist
+        """
+        if not cplc_hash:
+            return
+
+        # Get the current key from NFC thread (set during authentication)
+        key = self.nfc_thread.key
+        storage_changed = False
+
+        if self.secure_storage is not None:
+            tags = self.secure_storage["tags"]
+            existing_cplc_entry = tags.get(cplc_hash)
+            existing_uid_entry = tags.get(uid) if uid else None
+
+            # Merge logic: combine UID and CPLC entries, preferring user-set data
+            if existing_uid_entry and existing_cplc_entry:
+                # Both exist - merge, preferring custom names over default/ID names
+                cplc_name = existing_cplc_entry.get("name", "")
+                uid_name = existing_uid_entry.get("name", "")
+
+                # Prefer name that's not just an ID (custom user-set name)
+                def is_custom_name(name, card_id, uid_val):
+                    if not name:
+                        return False
+                    # Not custom if it equals the CPLC hash, UID, or placeholder
+                    return name not in (card_id, uid_val, "__CONTACT_CARD__", "")
+
+                if is_custom_name(cplc_name, cplc_hash, uid):
+                    final_name = cplc_name
+                elif is_custom_name(uid_name, cplc_hash, uid):
+                    final_name = uid_name
+                else:
+                    final_name = cplc_name or uid_name or cplc_hash
+
+                # Merge into CPLC entry
+                tags[cplc_hash] = {
+                    "key": existing_cplc_entry.get("key") or existing_uid_entry.get("key") or key,
+                    "name": final_name,
+                    "uid": uid,
+                    "migrated_from_uid": True,
+                }
+                # Remove the UID entry
+                del tags[uid]
+                storage_changed = True
+
+            elif existing_uid_entry:
+                # Only UID entry exists - migrate to CPLC
+                # But check if CPLC entry might have been created since
+                tags[cplc_hash] = {
+                    "key": existing_uid_entry.get("key") or key,
+                    "name": existing_uid_entry.get("name", cplc_hash),
+                    "uid": uid,
+                    "migrated_from_uid": True,
+                }
+                del tags[uid]
+                storage_changed = True
+
+            elif existing_cplc_entry:
+                # Only CPLC entry exists - just ensure UID is recorded
+                if uid and not existing_cplc_entry.get("uid"):
+                    existing_cplc_entry["uid"] = uid
+                    storage_changed = True
+
+            elif key:
+                # No entry exists - create new one
+                tags[cplc_hash] = {
+                    "key": key,
+                    "name": cplc_hash,
+                }
+                if uid:
+                    tags[cplc_hash]["uid"] = uid
+                storage_changed = True
+
+        if storage_changed:
+            self.write_secure_storage()
+
+        # Update known_tags config with CPLC
+        if key == DEFAULT_KEY:
+            self.config["known_tags"][cplc_hash] = True
+        else:
+            self.config["known_tags"][cplc_hash] = False
+        self.write_config()
+
+        # Update title bar to show CPLC-based name if available
+        self.nfc_thread.title_bar_signal.emit(self.nfc_thread.make_title_bar_string())
+
     def set_tag_name(self):
         # Prompt for the tag name using QInputDialog
         tag_name, ok = QInputDialog.getText(
             self, "Set Tag Name", "Enter the tag name:", QLineEdit.Normal
         )
         if ok and tag_name and self.nfc_thread:
-            if not self.secure_storage["tags"].get(self.nfc_thread.current_uid):
-                self.secure_storage["tags"][self.nfc_thread.current_uid] = {
-                    "name": self.nfc_thread.current_uid,
+            # Use card_id (CPLC hash preferred, UID fallback) as the storage key
+            card_id = self.nfc_thread.card_id
+            # Filter out placeholder
+            if card_id == "__CONTACT_CARD__":
+                card_id = None
+            if not card_id:
+                self.show_error_dialog("No card identifier available. Cannot save name.")
+                return
+
+            if not self.secure_storage["tags"].get(card_id):
+                self.secure_storage["tags"][card_id] = {
+                    "name": card_id,
                     "key": (
                         DEFAULT_KEY
-                        if self.config["known_tags"].get(self.nfc_thread.current_uid)
+                        if self.config["known_tags"].get(card_id)
                         else None
                     ),
                 }
             # Process the tag name (store it, set it, etc.)
-            self.secure_storage["tags"][self.nfc_thread.current_uid]["name"] = tag_name
+            self.secure_storage["tags"][card_id]["name"] = tag_name
+            self.write_secure_storage()
             self.update_title_bar(self.nfc_thread.make_title_bar_string())
 
     def set_tag_key(self):
@@ -1077,20 +1208,29 @@ class GPManagerApp(QMainWindow):
                     )
                     if not ok:
                         break
-            uid = self.nfc_thread.current_uid
-            if not self.secure_storage["tags"].get(uid):
-                self.secure_storage["tags"][uid] = {
-                    "name": uid,
-                    "key": DEFAULT_KEY if self.config["known_tags"].get(uid) else None,
+            # Use card_id (CPLC hash preferred, UID fallback) as the storage key
+            card_id = self.nfc_thread.card_id
+            # Filter out placeholder
+            if card_id == "__CONTACT_CARD__":
+                card_id = None
+            if not card_id:
+                self.show_error_dialog("No card identifier available. Cannot save key.")
+                return
+
+            if not self.secure_storage["tags"].get(card_id):
+                self.secure_storage["tags"][card_id] = {
+                    "name": card_id,
+                    "key": DEFAULT_KEY if self.config["known_tags"].get(card_id) else None,
                 }
-            self.secure_storage["tags"][uid]["key"] = tag_key
-            self.config["known_tags"][uid] = DEFAULT_KEY == tag_key
+            self.secure_storage["tags"][card_id]["key"] = tag_key
+            self.config["known_tags"][card_id] = DEFAULT_KEY == tag_key
 
             self.write_config()
+            self.write_secure_storage()
             self.nfc_thread.key = tag_key
             self.on_operation_complete(
                 True,
-                f"{self.secure_storage["tags"][uid]["name"]}'s saved key is now: {tag_key}",
+                f"{self.secure_storage["tags"][card_id]["name"]}'s saved key is now: {tag_key}",
             )
 
     def change_tag_key(self):

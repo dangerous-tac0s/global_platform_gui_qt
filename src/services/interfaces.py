@@ -5,8 +5,12 @@ These protocols define the contracts that services must implement,
 enabling easy mocking in tests and loose coupling between components.
 """
 
-from typing import Protocol, Optional, Dict, List, Tuple, Any
+from typing import Protocol, Optional, Dict, List, Tuple, Any, TYPE_CHECKING
 from ..models.config import ConfigData
+
+if TYPE_CHECKING:
+    from .gp_service import CPLCData
+    from ..models.card import CardIdentifier
 
 
 class IGPService(Protocol):
@@ -88,6 +92,22 @@ class IGPService(Protocol):
         """
         ...
 
+    def get_cplc_data(self, reader: str, key: str) -> Optional["CPLCData"]:
+        """
+        Retrieve CPLC (Card Production Life Cycle) data from the card.
+
+        CPLC provides a universal card identifier that works across both
+        contact and contactless interfaces.
+
+        Args:
+            reader: Reader name
+            key: Card master key
+
+        Returns:
+            CPLCData if available, None if retrieval fails
+        """
+        ...
+
 
 class ICardService(Protocol):
     """Interface for direct smartcard communication."""
@@ -135,6 +155,28 @@ class ICardService(Protocol):
 
         Returns:
             Tuple of (response_data, sw1, sw2)
+        """
+        ...
+
+    def get_card_identifier(
+        self,
+        gp_service: "IGPService",
+        reader: str,
+        key: str,
+    ) -> Optional["CardIdentifier"]:
+        """
+        Get a CardIdentifier combining UID and CPLC data.
+
+        Attempts to retrieve both UID (contactless) and CPLC (universal)
+        to create a composite identifier.
+
+        Args:
+            gp_service: GPService instance for CPLC retrieval
+            reader: Reader name
+            key: Card master key
+
+        Returns:
+            CardIdentifier with available identifiers, or None if card not present
         """
         ...
 
@@ -209,4 +251,38 @@ class ISecureStorageService(Protocol):
 
     def set_tag_name(self, uid: str, name: str) -> None:
         """Set the friendly name for a card UID."""
+        ...
+
+    def get_key_for_card(self, identifier: "CardIdentifier") -> Optional[str]:
+        """
+        Get the stored key using CardIdentifier (CPLC-first, UID-fallback).
+
+        Args:
+            identifier: CardIdentifier with cplc_hash and/or uid
+
+        Returns:
+            Key as hex string, or None if not stored
+        """
+        ...
+
+    def set_key_for_card(
+        self,
+        identifier: "CardIdentifier",
+        key: Optional[str],
+        name: Optional[str] = None,
+    ) -> None:
+        """
+        Store a key for a card using CardIdentifier.
+
+        Uses CPLC hash as primary key if available, otherwise uses UID.
+        """
+        ...
+
+    def upgrade_to_cplc(self, old_uid: str, cplc_hash: str) -> bool:
+        """
+        Migrate a UID-based entry to use CPLC as primary key.
+
+        Returns:
+            True if upgrade was performed, False if UID entry not found
+        """
         ...

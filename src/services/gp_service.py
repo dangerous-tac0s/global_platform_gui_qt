@@ -52,6 +52,45 @@ class ManifestInfo:
     jcop_version: Optional[str] = None
 
 
+@dataclass
+class CPLCData:
+    """
+    Parsed CPLC (Card Production Life Cycle) data.
+
+    CPLC provides a universal card identifier that works across both contact
+    and contactless interfaces, unlike UID which only works contactless.
+    """
+    raw_hex: str  # Full CPLC hex data for hashing
+    ic_fabricator: Optional[str] = None
+    ic_type: Optional[str] = None
+    os_id: Optional[str] = None
+    os_release_date: Optional[str] = None
+    os_release_level: Optional[str] = None
+    ic_fabrication_date: Optional[str] = None
+    ic_serial_number: Optional[str] = None
+    ic_batch_id: Optional[str] = None
+    ic_module_fabricator: Optional[str] = None
+    ic_module_packaging_date: Optional[str] = None
+    icc_manufacturer: Optional[str] = None
+    ic_embedding_date: Optional[str] = None
+    ic_pre_personalizer: Optional[str] = None
+    ic_pre_personalization_date: Optional[str] = None
+    ic_pre_personalization_equipment_id: Optional[str] = None
+    ic_personalizer: Optional[str] = None
+    ic_personalization_date: Optional[str] = None
+    ic_personalization_equipment_id: Optional[str] = None
+
+    def compute_hash(self) -> str:
+        """
+        Compute the CPLC-based identifier from raw CPLC hex data.
+
+        Returns format: "CPLC_" + first 16 hex chars of SHA-256 hash.
+        """
+        import hashlib
+        h = hashlib.sha256(self.raw_hex.upper().encode()).hexdigest()
+        return f"CPLC_{h[:16].upper()}"
+
+
 class GPService:
     """
     Service for interacting with GlobalPlatformPro.
@@ -143,8 +182,14 @@ class GPService:
                 timeout=timeout,
                 cwd=self.working_dir,
             )
+            # Only treat as error if returncode is non-zero or stderr has actual errors
+            # (not just WARN messages which are common with GP)
+            has_real_error = result.stderr and not all(
+                line.strip().startswith("[WARN]") or not line.strip()
+                for line in result.stderr.splitlines()
+            )
             return GPResult(
-                success=result.returncode == 0 and not result.stderr,
+                success=result.returncode == 0 and not has_real_error,
                 stdout=result.stdout,
                 stderr=result.stderr,
                 return_code=result.returncode,
@@ -335,6 +380,170 @@ class GPService:
             GPResult with card info in stdout
         """
         return self._run_command(["--info"], key=key, reader=reader)
+
+    def get_cplc_data(self, reader: str, key: str) -> Optional[CPLCData]:
+        """
+        Retrieve CPLC (Card Production Life Cycle) data from the card.
+
+        Uses gp --info and parses the CPLC section to extract card
+        identification data that works across contact and contactless interfaces.
+
+        Args:
+            reader: Reader name
+            key: Card master key
+
+        Returns:
+            CPLCData if available, None if CPLC retrieval fails
+        """
+        result = self._run_command(["--info"], key=key, reader=reader)
+        if not result.success:
+            return None
+
+        return self._parse_cplc_from_info(result.stdout)
+
+    def get_cplc_data_no_auth(self, reader: str) -> Optional[CPLCData]:
+        """
+        Retrieve CPLC data without requiring authentication.
+
+        CPLC is card production data that is typically readable without
+        needing the card's master key. GP will use the default key internally.
+
+        Args:
+            reader: Reader name
+
+        Returns:
+            CPLCData if available, None if CPLC retrieval fails
+        """
+        # Build command: gp --info -r <reader>
+        cmd = list(self._gp_cmd)
+        cmd.extend(["-r", reader])
+        cmd.append("--info")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=self.working_dir,
+            )
+            # Even if auth fails, CPLC might be in the output
+            return self._parse_cplc_from_info(result.stdout)
+        except Exception:
+            return None
+
+    def _parse_cplc_from_info(self, info_output: str) -> Optional[CPLCData]:
+        """
+        Parse CPLC data from gp --info output.
+
+        GP --info includes CPLC section like:
+            CPLC: ICFabricator=4790
+                  ICType=D321
+                  OperatingSystemID=4700
+                  ...
+
+        Note: Uses '=' for field=value pairs, first field on same line as 'CPLC:'
+
+        Args:
+            info_output: Raw stdout from gp --info
+
+        Returns:
+            CPLCData if CPLC section found, None otherwise
+        """
+        lines = info_output.splitlines()
+
+        # Find CPLC section and parse fields
+        cplc_fields: Dict[str, str] = {}
+        raw_hex_parts: List[str] = []
+        in_cplc_section = False
+
+        # Mapping from GP output field names to our dataclass fields
+        field_mapping = {
+            "ICFabricator": "ic_fabricator",
+            "ICType": "ic_type",
+            "OperatingSystemID": "os_id",
+            "OperatingSystemReleaseDate": "os_release_date",
+            "OperatingSystemReleaseLevel": "os_release_level",
+            "ICFabricationDate": "ic_fabrication_date",
+            "ICSerialNumber": "ic_serial_number",
+            "ICBatchIdentifier": "ic_batch_id",
+            "ICModuleFabricator": "ic_module_fabricator",
+            "ICModulePackagingDate": "ic_module_packaging_date",
+            "ICCManufacturer": "icc_manufacturer",
+            "ICEmbeddingDate": "ic_embedding_date",
+            "ICPrePersonalizer": "ic_pre_personalizer",
+            "ICPrePersonalizationEquipmentDate": "ic_pre_personalization_date",
+            "ICPrePersonalizationEquipmentID": "ic_pre_personalization_equipment_id",
+            "ICPersonalizer": "ic_personalizer",
+            "ICPersonalizationDate": "ic_personalization_date",
+            "ICPersonalizationEquipmentID": "ic_personalization_equipment_id",
+        }
+
+        def parse_field(text: str) -> None:
+            """Parse a field=value pair and add to cplc_fields."""
+            if "=" not in text:
+                return
+            parts = text.split("=", 1)
+            if len(parts) == 2:
+                field_name = parts[0].strip()
+                field_value = parts[1].strip()
+                # Remove any parenthetical annotations like "(2023-06-29)"
+                if " (" in field_value:
+                    field_value = field_value.split(" (")[0]
+                if field_name in field_mapping:
+                    cplc_fields[field_mapping[field_name]] = field_value
+                    raw_hex_parts.append(field_value)
+
+        for line in lines:
+            # Check for CPLC section start: "CPLC: ICFabricator=4790"
+            if line.startswith("CPLC:"):
+                in_cplc_section = True
+                # First field may be on same line
+                remainder = line[5:].strip()  # After "CPLC:"
+                if remainder:
+                    parse_field(remainder)
+                continue
+
+            if in_cplc_section:
+                stripped = line.strip()
+
+                # End of CPLC section: empty line or new top-level section
+                if not stripped:
+                    break
+                if not line.startswith(" ") and not line.startswith("\t"):
+                    # Not indented = new section
+                    break
+
+                # Parse continuation line with field=value
+                parse_field(stripped)
+
+        if not cplc_fields:
+            return None
+
+        # Build raw hex string from all CPLC field values
+        raw_hex = "".join(raw_hex_parts)
+
+        return CPLCData(
+            raw_hex=raw_hex,
+            ic_fabricator=cplc_fields.get("ic_fabricator"),
+            ic_type=cplc_fields.get("ic_type"),
+            os_id=cplc_fields.get("os_id"),
+            os_release_date=cplc_fields.get("os_release_date"),
+            os_release_level=cplc_fields.get("os_release_level"),
+            ic_fabrication_date=cplc_fields.get("ic_fabrication_date"),
+            ic_serial_number=cplc_fields.get("ic_serial_number"),
+            ic_batch_id=cplc_fields.get("ic_batch_id"),
+            ic_module_fabricator=cplc_fields.get("ic_module_fabricator"),
+            ic_module_packaging_date=cplc_fields.get("ic_module_packaging_date"),
+            icc_manufacturer=cplc_fields.get("icc_manufacturer"),
+            ic_embedding_date=cplc_fields.get("ic_embedding_date"),
+            ic_pre_personalizer=cplc_fields.get("ic_pre_personalizer"),
+            ic_pre_personalization_date=cplc_fields.get("ic_pre_personalization_date"),
+            ic_pre_personalization_equipment_id=cplc_fields.get("ic_pre_personalization_equipment_id"),
+            ic_personalizer=cplc_fields.get("ic_personalizer"),
+            ic_personalization_date=cplc_fields.get("ic_personalization_date"),
+            ic_personalization_equipment_id=cplc_fields.get("ic_personalization_equipment_id"),
+        )
 
     def get_command_log(self) -> List[str]:
         """Get log of executed commands (for verbose/debug mode)."""
