@@ -1,0 +1,977 @@
+"""
+NFCHandlerThread - Background thread for NFC card operations.
+
+Monitors for smart card readers and cards, handles card authentication,
+and provides install/uninstall functionality. Maintains backward
+compatibility with Qt signals while adding EventBus support.
+"""
+
+import os
+import re
+import subprocess
+import sys
+import time
+import zipfile
+from threading import Event
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+
+import chardet
+from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot
+from smartcard.System import readers
+
+from ..models.card import CardIdentifier
+from ..events.event_bus import (
+    EventBus,
+    ErrorEvent,
+    StatusMessageEvent,
+    OperationResultEvent,
+    ProgressEvent,
+    CardPresenceEvent,
+    InstalledAppsUpdatedEvent,
+    KeyPromptEvent,
+)
+
+if TYPE_CHECKING:
+    from ..services.interfaces import IGPService
+
+# Default key for GlobalPlatform cards
+DEFAULT_KEY = "404142434445464748494A4B4C4D4E4F"
+
+
+class NFCHandlerThread(QThread):
+    """
+    Background thread for monitoring NFC readers and handling card operations.
+
+    Qt Signals (Legacy):
+    - error_signal: Error messages
+    - status_update_signal: Status messages
+    - title_bar_signal: Title bar updates
+    - operation_complete_signal: Operation results
+    - reader_detected_signal: Reader list updates
+    - card_detected_signal: Card UID detected
+    - installed_apps_updated_signal: Installed apps changed
+    - get_key_signal: Request key from storage
+    - show_key_prompt_signal: Show key prompt dialog
+    - known_tags_update_signal: Update known tag storage
+    - card_removed_signal: Card was removed
+    - cplc_retrieved_signal: CPLC data retrieved
+
+    EventBus Events (when enabled):
+    - CardPresenceEvent: Card detected/removed
+    - StatusMessageEvent: Status updates
+    - ErrorEvent: Error notifications
+    - OperationResultEvent: Install/uninstall results
+    - KeyPromptEvent: Key prompt requests
+    - InstalledAppsUpdatedEvent: App list changes
+    """
+
+    # Legacy Qt signals (kept for backward compatibility)
+    error_signal = pyqtSignal(str)
+    status_update_signal = pyqtSignal(str)
+    title_bar_signal = pyqtSignal(str)
+    operation_complete_signal = pyqtSignal(bool, str)
+    reader_detected_signal = pyqtSignal(list)
+    readers_updated_signal = pyqtSignal(list)  # Alias for reader_detected_signal
+    card_detected_signal = pyqtSignal(str)
+    card_present_signal = pyqtSignal(bool)  # Card presence state
+    installed_apps_updated_signal = pyqtSignal(dict)
+    get_key_signal = pyqtSignal(str)  # arg is card_id (CPLC hash or UID)
+    show_key_prompt_signal = pyqtSignal(str)  # arg is card_id
+    key_setter_signal = pyqtSignal(str)  # Key value to set
+    known_tags_update_signal = pyqtSignal(str, str)  # card_id, key
+    card_removed_signal = pyqtSignal()
+    cplc_retrieved_signal = pyqtSignal(str, str)  # uid, cplc_hash
+
+    def __init__(
+        self,
+        app,
+        gp_service: Optional["IGPService"] = None,
+        parent=None,
+        use_event_bus: bool = False,
+    ):
+        """
+        Initialize the NFC handler thread.
+
+        Args:
+            app: Application instance (for config access during migration)
+            gp_service: Service for GlobalPlatformPro operations
+            parent: Optional QThread parent
+            use_event_bus: If True, emit EventBus events in addition to signals
+        """
+        super().__init__(parent)
+        self.app = app
+        self._gp_service = gp_service
+        self.use_event_bus = use_event_bus
+
+        # EventBus instance (lazy loaded if enabled)
+        self._event_bus = EventBus.instance() if use_event_bus else None
+
+        # Thread control events
+        self._stop_event = Event()
+        self._pause_event = Event()
+        self._pause_event.set()  # Start unpaused
+        self._paused_ack = Event()  # Acknowledge pause
+
+        # Reader and card state
+        self.known_readers: List[str] = []
+        self.selected_reader_name: Optional[str] = None
+        self.current_uid: Optional[str] = None
+        self.current_identifier: Optional[CardIdentifier] = None
+        self.key: Optional[str] = None
+        self.card_detected: bool = False
+        self.valid_card_detected: bool = False
+
+        # Storage tracking
+        self.storage = {"persistent": -1, "transient": -1}
+
+        # GlobalPlatformPro command paths
+        self.gp = {
+            "posix": [resource_path("gp.jar")],
+            "nt": ["java", "-jar", resource_path("gp.jar")],
+        }
+
+        # Add java for posix if needed
+        if os.name == "posix":
+            self.gp["posix"] = ["java", "-jar", *self.gp["posix"]]
+
+    @property
+    def card_id(self) -> Optional[str]:
+        """Get the primary card identifier (CPLC preferred, UID fallback)."""
+        if self.current_identifier:
+            return self.current_identifier.primary_id
+        return self.current_uid
+
+    # =========================================================================
+    # Thread Control
+    # =========================================================================
+
+    def run(self):
+        """Main thread loop for monitoring readers and cards."""
+        last_reader_list: List[str] = []
+        card_present = False
+
+        while not self._stop_event.is_set():
+            # Handle pause requests
+            if not self._pause_event.is_set():
+                self._paused_ack.set()
+                self._pause_event.wait()
+                self._paused_ack.clear()
+
+            try:
+                # Get current readers (filter out SAM readers)
+                all_readers = readers()
+                filtered_readers = [
+                    r for r in all_readers if "SAM" not in str(r).upper()
+                ]
+                reader_names = [str(r) for r in filtered_readers]
+
+                # Detect reader changes
+                if reader_names != last_reader_list:
+                    last_reader_list = reader_names
+                    self.reader_detected_signal.emit(reader_names)
+                    self.readers_updated_signal.emit(reader_names)  # Alias
+                    self._emit_status(f"Readers: {', '.join(reader_names) or 'None'}")
+
+                    # Auto-select first reader if none selected
+                    if reader_names and not self.selected_reader_name:
+                        self.selected_reader_name = reader_names[0]
+
+                # Check for card presence
+                if self.selected_reader_name:
+                    is_present = self.is_card_present()
+
+                    if is_present and not card_present:
+                        # Card just inserted
+                        card_present = True
+                        uid = self.get_card_uid()
+                        self.current_uid = uid
+                        self.card_detected = True
+
+                        self.card_detected_signal.emit(uid)
+                        self.card_present_signal.emit(True)
+                        self._emit_card_presence(True, uid)
+
+                        # Check if JCOP and get key
+                        if self.is_jcop(self.selected_reader_name):
+                            self.valid_card_detected = True
+                            self.get_key()
+                        else:
+                            self.valid_card_detected = False
+
+                    elif not is_present and card_present:
+                        # Card removed
+                        card_present = False
+                        self.current_uid = None
+                        self.current_identifier = None
+                        self.key = None
+                        self.card_detected = False
+                        self.valid_card_detected = False
+
+                        self.card_removed_signal.emit()
+                        self.card_present_signal.emit(False)
+                        self._emit_card_presence(False, None)
+                        self.title_bar_signal.emit(self.make_title_bar_string())
+
+            except Exception as e:
+                self._emit_error(f"Thread error: {e}")
+
+            time.sleep(0.5)
+
+    def pause(self):
+        """Pause the monitoring thread."""
+        self._pause_event.clear()
+
+    def resume(self):
+        """Resume the monitoring thread."""
+        self._pause_event.set()
+
+    def stop(self):
+        """Stop the monitoring thread."""
+        self._stop_event.set()
+        self.resume()
+
+    # =========================================================================
+    # Card Detection
+    # =========================================================================
+
+    def is_card_present(self) -> bool:
+        """Check if a card is present in the selected reader."""
+        if not self.selected_reader_name:
+            return False
+
+        try:
+            filtered_readers = [
+                r for r in readers() if "SAM" not in str(r).upper()
+            ]
+            reader = next(
+                x for x in filtered_readers
+                if self.selected_reader_name in str(x)
+            )
+            connection = reader.createConnection()
+            connection.connect()
+            connection.disconnect()
+            return True
+        except Exception:
+            return False
+
+    def get_card_uid(self) -> str:
+        """Get the UID of the card in the selected reader."""
+        connection = None
+        try:
+            GET_UID = [0xFF, 0xCA, 0x00, 0x00, 0x00]
+            filtered_readers = [
+                r for r in readers() if "SAM" not in str(r).upper()
+            ]
+            reader = next(
+                x for x in filtered_readers
+                if self.selected_reader_name in str(x)
+            )
+            connection = reader.createConnection()
+            connection.connect()
+            data, sw1, sw2 = connection.transmit(GET_UID)
+
+            if sw1 == 0x90 and sw2 == 0x00:
+                return "".join(f"{b:02X}" for b in data)
+            else:
+                # Contact cards don't return UID
+                return "__CONTACT_CARD__"
+        except Exception as e:
+            return "__CONTACT_CARD__"
+        finally:
+            if connection:
+                try:
+                    connection.disconnect()
+                except Exception:
+                    pass
+
+    def is_jcop(self, reader_name: str) -> bool:
+        """
+        Check if the card is a JavaCard (JCOP).
+
+        Uses ISO 7816-4 SELECT to verify JavaCard support.
+        """
+        SELECT = [0x00, 0xA4, 0x04, 0x00, 0x00]
+        connection = None
+        try:
+            filtered_readers = [
+                r for r in readers() if "SAM" not in str(r).upper()
+            ]
+            reader = next(
+                x for x in filtered_readers if self.selected_reader_name in str(x)
+            )
+            connection = reader.createConnection()
+            connection.connect()
+            data, sw1, sw2 = connection.transmit(SELECT)
+            result = hex(sw1) == "0x90" and sw2 == 0
+            return result
+        except Exception as e:
+            print(f"Unable to perform select: {e}")
+            return False
+        finally:
+            if connection:
+                try:
+                    connection.disconnect()
+                except Exception:
+                    pass
+
+    def is_jcop3(self, reader_name: str) -> bool:
+        """Check if the card is JavaCard v3."""
+        try:
+            if (
+                self.key is None
+                or self.app.config["known_tags"].get(self.current_uid, None) is None
+            ):
+                return False  # Protect unknown tags
+            cmd = [*self.gp[os.name][0], "-k", self.key, "--info", "-r", reader_name]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            return "JavaCard v3" in result.stdout
+        except Exception:
+            return False
+
+    # =========================================================================
+    # CPLC and Card Identification
+    # =========================================================================
+
+    def retrieve_cplc_and_update_identifier(self):
+        """
+        Retrieve CPLC data and update the current card identifier.
+
+        Called after authentication. Creates a CardIdentifier with both
+        CPLC hash (if available) and UID.
+        """
+        if not self.key or not self.selected_reader_name:
+            return
+
+        real_uid = self.current_uid if self.current_uid != "__CONTACT_CARD__" else None
+
+        try:
+            # Use GPService to get CPLC data (create instance if needed)
+            from ..services.gp_service import GPService
+
+            if self._gp_service:
+                gp = self._gp_service
+            else:
+                gp = GPService()
+
+            cplc_data = gp.get_cplc_data(self.selected_reader_name, self.key)
+
+            if cplc_data:
+                cplc_hash = cplc_data.compute_hash()
+                self.current_identifier = CardIdentifier(
+                    cplc_hash=cplc_hash, uid=real_uid
+                )
+                # Emit signal for storage upgrade
+                self.cplc_retrieved_signal.emit(real_uid or "", cplc_hash)
+                self.title_bar_signal.emit(self.make_title_bar_string())
+            else:
+                # CPLC not available, use UID-only identifier
+                if real_uid:
+                    self.current_identifier = CardIdentifier(uid=real_uid)
+                else:
+                    self.current_identifier = None
+
+        except Exception:
+            # CPLC retrieval failed, fall back to UID-only
+            if real_uid:
+                self.current_identifier = CardIdentifier(uid=real_uid)
+            else:
+                self.current_identifier = None
+
+    # =========================================================================
+    # Memory and Status
+    # =========================================================================
+
+    def make_title_bar_string(self) -> str:
+        """Build the title bar string with current card info."""
+        base = "GlobalPlatform GUI"
+
+        if not self.selected_reader_name:
+            return base
+
+        if not self.current_uid:
+            return f"{base} - {self.selected_reader_name}"
+
+        # Use card_id (prefers CPLC hash over UID)
+        card_identifier = self.card_id
+        if card_identifier == "__CONTACT_CARD__":
+            uid_display = "Contact Card"
+        elif card_identifier:
+            uid_display = card_identifier
+        else:
+            uid_display = self.current_uid
+
+        key_status = "🔓" if self.key else "🔒"
+        memory_str = self.get_memory_status()
+
+        return f"{base} - {uid_display} {key_status} {memory_str}"
+
+    def get_memory_status(self) -> str:
+        """Get memory status string."""
+        if self.storage["persistent"] != -1 and self.storage["transient"] != -1:
+            p_kb = self.storage["persistent"] / 1024
+            t_kb = self.storage["transient"] / 1024
+            return f"> Free Memory > Persistent: {p_kb:.0f}kB / Transient: {t_kb:.1f}kB"
+        else:
+            return "> Javacard Memory not installed"
+
+    def update_memory(self, reader_idx: int = 0):
+        """Update memory info from card."""
+        # Import here to avoid circular imports
+        from measure import get_memory
+
+        memory = get_memory(reader=reader_idx)
+        if memory is None or memory == -1:
+            self.storage["persistent"] = -1
+            self.storage["transient"] = -1
+            return
+
+        self.storage["persistent"] = memory["persistent"]["free"]
+        self.storage["transient"] = (
+            memory["transient"]["reset_free"] + memory["transient"]["deselect_free"]
+        )
+
+    def _get_reader_index(self) -> int:
+        """Get the index of the selected reader."""
+        try:
+            all_readers = readers()
+            filtered_readers = [r for r in all_readers if "SAM" not in str(r).upper()]
+            reader_names = [str(r) for r in filtered_readers]
+            if self.selected_reader_name in reader_names:
+                return reader_names.index(self.selected_reader_name)
+        except Exception:
+            pass
+        return 0
+
+    # =========================================================================
+    # Key Management
+    # =========================================================================
+
+    def get_key(self):
+        """Request key from storage or prompt user."""
+        card_id = self.card_id
+        if card_id == "__CONTACT_CARD__":
+            card_id = None
+
+        self.get_key_signal.emit(card_id)
+        self._emit_key_prompt(card_id, needs_prompt=False)
+
+    @pyqtSlot(str)
+    def key_setter(self, key: str):
+        """
+        Set the key from UI prompt.
+
+        Called from UI when user submits key.
+        """
+        self.key = key
+        if self.key is not None:
+            # Retrieve CPLC data and update identifier
+            self.retrieve_cplc_and_update_identifier()
+
+            # Update memory status
+            reader_idx = self._get_reader_index()
+            self.update_memory(reader_idx)
+
+            # Emit signal to store key under CPLC (if not already done by retrieve_cplc)
+            if self.current_identifier and self.current_identifier.cplc_hash:
+                real_uid = (
+                    self.current_uid if self.current_uid != "__CONTACT_CARD__" else None
+                )
+                self.cplc_retrieved_signal.emit(
+                    real_uid or "", self.current_identifier.cplc_hash
+                )
+
+            self.title_bar_signal.emit(self.make_title_bar_string())
+            self.get_installed_apps(_internal=False)
+
+    def change_key(self, new_key: str):
+        """Change the card's GlobalPlatform key."""
+        storage_key = self.card_id if self.card_id != "__CONTACT_CARD__" else None
+
+        if new_key == DEFAULT_KEY:
+            cmd = ["--unlock-card"]
+        else:
+            cmd = ["--lock", new_key]
+
+        result = self.run_gp(cmd, "Unable to change key:")
+        if result == -1:
+            return
+
+        if storage_key:
+            self.known_tags_update_signal.emit(storage_key, new_key)
+
+    # =========================================================================
+    # GlobalPlatform Commands
+    # =========================================================================
+
+    def run_gp(self, command: List[str], error_preface: str = "Error:"):
+        """Run a GlobalPlatformPro command."""
+        if not self.key:
+            return None  # Protect unknown tags
+
+        result = subprocess.run(
+            [
+                *self.gp[os.name],
+                "-k",
+                self.key,
+                "-r",
+                self.selected_reader_name,
+                *command,
+            ],
+            capture_output=True,
+        )
+
+        stdout = result.stdout.decode()
+        stderr = result.stderr.decode()
+
+        # Check for useful output
+        has_useful_output = stdout and (
+            "PKG:" in stdout or "APP:" in stdout or "ISD:" in stdout
+        )
+        if result.returncode == 0 or has_useful_output:
+            return stdout
+        else:
+            self._emit_error(f"{error_preface} {stderr[:60]}")
+            return -1
+
+    def get_installed_apps(self, _internal: bool = False) -> Dict[str, Optional[str]]:
+        """
+        Get list of installed apps from the card.
+
+        Returns:
+            Dict mapping AID to version (or None if no version)
+        """
+        if not self.selected_reader_name:
+            self._emit_status("No reader selected for get_installed_apps.")
+            return {}
+
+        if not _internal:
+            self.pause()
+            self._paused_ack.wait(timeout=1.0)
+
+        try:
+            result = self.run_gp(["--list"], "Unable to list apps:")
+            if result == -1:
+                return {}
+
+            lines = result.splitlines()
+            pkg_app_versions: Dict[str, Optional[str]] = {}
+            current_pkg_version: Optional[str] = None
+            parsing_pkg_block = False
+            installed_set = set()
+
+            for line in lines:
+                line = line.strip()
+
+                if line.startswith("PKG:"):
+                    parsing_pkg_block = True
+                    current_pkg_version = None
+                    continue
+
+                if parsing_pkg_block:
+                    if not line or line.startswith("PKG:") or line.startswith("APP:"):
+                        parsing_pkg_block = False
+                    else:
+                        if "Version:" in line:
+                            parts = line.split("Version:", 1)
+                            current_pkg_version = parts[1].strip()
+                        elif "Applet:" in line:
+                            parts = line.split("Applet:", 1)
+                            raw_aid = parts[1].strip()
+                            norm_aid = raw_aid.replace(" ", "").upper()
+                            pkg_app_versions[norm_aid] = current_pkg_version
+
+                if line.startswith("APP:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        raw_aid = parts[1]
+                        norm_aid = raw_aid.replace(" ", "").upper()
+                        installed_set.add(norm_aid)
+
+            # Build result dict
+            installed_apps: Dict[str, Optional[str]] = {}
+            for aid in installed_set:
+                installed_apps[aid] = pkg_app_versions.get(aid)
+
+            return installed_apps
+
+        except Exception as e:
+            self._emit_error(f"Exception listing apps: {e}")
+            return {}
+        finally:
+            if not _internal:
+                self.resume()
+
+    # =========================================================================
+    # Installation
+    # =========================================================================
+
+    def install_app(self, cap_file_path: str, params: Optional[Dict[str, Any]] = None):
+        """
+        Install an applet from a CAP file.
+
+        Args:
+            cap_file_path: Path to the CAP file
+            params: Optional installation parameters
+        """
+        if not self.selected_reader_name:
+            self._emit_operation_result(False, "No reader selected.")
+            return
+
+        self.pause()
+        self._paused_ack.wait(timeout=1.0)
+
+        try:
+            if self.key is None or len(self.key) == 0:
+                self.show_key_prompt_signal.emit(self.current_uid)
+                self._emit_key_prompt(self.current_uid, needs_prompt=True)
+
+            if self.key is None:
+                self._emit_error("No valid key has been provided")
+                return
+
+            cmd = [
+                *self.gp[os.name],
+                "-k",
+                self.key,
+                "--install",
+                cap_file_path,
+                "-r",
+                self.selected_reader_name,
+            ]
+            if params and "param_string" in params:
+                cmd.extend(["--params", *params["param_string"].split(" ")])
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                installed = self.get_installed_apps(_internal=True)
+                self.installed_apps_updated_signal.emit(installed)
+                self._emit_installed_apps_updated(installed)
+            else:
+                stderr = result.stderr
+                if "[WARN]" in stderr:
+                    lines = [l for l in stderr.split("\n") if not l.startswith("[WARN]")]
+                    stderr = "\n".join(lines).strip()
+                err_msg = f"Install failed: {stderr[:100]}"
+                self._emit_error(err_msg)
+                # Try to remove the app
+                self.uninstall_app_by_cap(cap_file_path)
+
+        except Exception as e:
+            err_msg = f"Install error: {e}"
+            self._emit_error(err_msg)
+        finally:
+            if os.path.exists(cap_file_path) and not self.app.config.get(
+                "cache_latest_release", False
+            ):
+                os.remove(cap_file_path)
+            self.update_memory(self._get_reader_index())
+            self.title_bar_signal.emit(self.make_title_bar_string())
+            self.resume()
+
+    # =========================================================================
+    # Uninstallation
+    # =========================================================================
+
+    def uninstall_app(
+        self, aid: str, force: bool = False, _internal: bool = False
+    ):
+        """
+        Uninstall an applet by AID.
+
+        Args:
+            aid: Application Identifier
+            force: Force deletion
+            _internal: Internal call (don't pause)
+        """
+        if not self.selected_reader_name:
+            self._emit_operation_result(False, "No reader selected.")
+            return
+
+        if not _internal:
+            self.pause()
+            self._paused_ack.wait(timeout=1.0)
+
+        try:
+            if self.key is None:
+                self._emit_operation_result(False, "No valid key has been provided")
+                return
+
+            cmd = [*self.gp[os.name], "-k", self.key, "--delete"]
+            cmd.extend([aid, "-r", self.selected_reader_name])
+            if force:
+                cmd.append("-f")
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if len(result.stderr) == 0:
+                self._emit_operation_result(True, f"Uninstalled {aid}")
+                installed = self.get_installed_apps(_internal=True)
+                self.installed_apps_updated_signal.emit(installed)
+                self._emit_installed_apps_updated(installed)
+            else:
+                if result.stderr.startswith(
+                    "Failed to open secure channel: Card cryptogram invalid!"
+                ):
+                    self.key = None
+                    storage_key = (
+                        self.card_id if self.card_id != "__CONTACT_CARD__" else None
+                    )
+                    if storage_key:
+                        self.known_tags_update_signal.emit(storage_key, "False")
+                    self._emit_error(
+                        "Invalid key used: further attempts with invalid keys can brick the device!"
+                    )
+                else:
+                    self._emit_error(result.stderr)
+
+        except Exception as e:
+            err_msg = f"Uninstall error (AID): {e}"
+            self._emit_operation_result(False, err_msg)
+            self._emit_error(err_msg)
+        finally:
+            self.update_memory(self._get_reader_index())
+            self.title_bar_signal.emit(self.make_title_bar_string())
+            if not _internal:
+                self.resume()
+
+    def uninstall_app_by_cap(
+        self,
+        cap_file_path: str,
+        fallback_aid: Optional[str] = None,
+        force: bool = False,
+    ):
+        """
+        Uninstall an applet by CAP file.
+
+        Args:
+            cap_file_path: Path to the CAP file
+            fallback_aid: AID to use if CAP uninstall fails
+            force: Force deletion
+        """
+        if not self.selected_reader_name:
+            self._emit_operation_result(False, "No reader selected.")
+            return
+
+        if self.key is None:
+            self._emit_operation_result(False, "No valid key has been provided")
+            return
+
+        self.pause()
+        self._paused_ack.wait(timeout=1.0)
+
+        try:
+            cmd = [*self.gp[os.name], "-k", self.key, "--uninstall"]
+            if force:
+                cmd.append("-f")
+            cmd.extend([cap_file_path, "-r", self.selected_reader_name])
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                installed = self.get_installed_apps(_internal=True)
+                self.installed_apps_updated_signal.emit(installed)
+                self._emit_installed_apps_updated(installed)
+            else:
+                manifest = extract_manifest_from_cap(cap_file_path)
+                fallback_aid = get_selected_manifest(manifest)["aid"]
+
+                if fallback_aid:
+                    self.uninstall_app(fallback_aid, force=force, _internal=True)
+                else:
+                    self._emit_operation_result(False, "Failed to uninstall")
+
+        except Exception as e:
+            err_msg = f"Uninstall error (CAP file): {e}"
+            self._emit_error(err_msg)
+
+            if fallback_aid:
+                self._emit_status(f"Falling back to AID-based uninstall: {fallback_aid}")
+                self.uninstall_app(fallback_aid, force=force, _internal=True)
+            else:
+                self._emit_operation_result(False, err_msg)
+        finally:
+            if os.path.exists(cap_file_path):
+                os.remove(cap_file_path)
+            self.update_memory(self._get_reader_index())
+            self.title_bar_signal.emit(self.make_title_bar_string())
+            self.resume()
+
+    # =========================================================================
+    # EventBus Emission Helpers
+    # =========================================================================
+
+    def _emit_error(self, message: str) -> None:
+        """Emit error via signal and optionally EventBus."""
+        print(message)
+        self.error_signal.emit(message)
+
+        if self._event_bus:
+            self._event_bus.emit(ErrorEvent(
+                message=message,
+                recoverable=True,
+            ))
+
+    def _emit_status(self, message: str) -> None:
+        """Emit status via signal and optionally EventBus."""
+        self.status_update_signal.emit(message)
+
+        if self._event_bus:
+            self._event_bus.emit(StatusMessageEvent(
+                message=message,
+                level="info",
+            ))
+
+    def _emit_operation_result(self, success: bool, message: str) -> None:
+        """Emit operation result via signal and optionally EventBus."""
+        self.operation_complete_signal.emit(success, message)
+
+        if self._event_bus:
+            self._event_bus.emit(OperationResultEvent(
+                success=success,
+                message=message,
+                operation_type="nfc_operation",
+            ))
+
+    def _emit_card_presence(self, present: bool, uid: Optional[str]) -> None:
+        """Emit card presence via EventBus."""
+        if self._event_bus:
+            self._event_bus.emit(CardPresenceEvent(
+                present=present,
+                uid=uid,
+            ))
+
+    def _emit_key_prompt(self, card_id: Optional[str], needs_prompt: bool) -> None:
+        """Emit key prompt request via EventBus."""
+        if self._event_bus:
+            self._event_bus.emit(KeyPromptEvent(
+                card_id=card_id or "",
+                needs_prompt=needs_prompt,
+            ))
+
+    def _emit_installed_apps_updated(self, apps: Dict[str, Optional[str]]) -> None:
+        """Emit installed apps updated via EventBus."""
+        if self._event_bus:
+            self._event_bus.emit(InstalledAppsUpdatedEvent(apps=apps))
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def detect_encoding(file_path: str) -> str:
+    """Detect the file encoding using chardet."""
+    with open(file_path, "rb") as f:
+        raw_data = f.read()
+        result = chardet.detect(raw_data)
+        return result["encoding"]
+
+
+def extract_manifest_from_cap(
+    cap_file_path: str, output_dir: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Extract the MANIFEST.MF file from a CAP archive.
+
+    Args:
+        cap_file_path: Path to the CAP archive (ZIP file)
+        output_dir: Optional directory to save MANIFEST.MF
+
+    Returns:
+        Dictionary with parsed manifest data, or None on error
+    """
+    temp_path = "temp_manifest.MF"
+    manifest_content = ""
+
+    try:
+        with zipfile.ZipFile(cap_file_path, "r") as zip_ref:
+            file_list = zip_ref.namelist()
+            manifest_file = "META-INF/MANIFEST.MF"
+
+            if manifest_file not in file_list:
+                print(f"Error: {manifest_file} not found in the CAP archive.")
+                return None
+
+            with zip_ref.open(manifest_file) as mf_file:
+                with open(temp_path, "wb") as temp_file:
+                    temp_file.write(mf_file.read())
+
+                encoding = detect_encoding(temp_path)
+
+                with open(temp_path, "r", encoding=encoding) as temp_file:
+                    manifest_content = temp_file.read()
+
+                if output_dir:
+                    output_file_path = os.path.join(output_dir, "MANIFEST.MF")
+                    with open(output_file_path, "w") as output_file:
+                        output_file.write(manifest_content)
+                    print(f"MANIFEST.MF extracted to {output_file_path}")
+
+                return parse_manifest(manifest_content)
+
+    except zipfile.BadZipFile:
+        print(f"Error: The file {cap_file_path} is not a valid ZIP archive.")
+        return None
+    except Exception as e:
+        print(cap_file_path)
+        print(f"An error occurred while extracting the MANIFEST.MF: {e}")
+        print(manifest_content)
+        return None
+    finally:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+
+def parse_manifest(manifest_content: str) -> Dict[str, Any]:
+    """
+    Parse the manifest content to extract all fields.
+
+    Args:
+        manifest_content: The contents of the MANIFEST.MF file
+
+    Returns:
+        Dictionary with parsed manifest data
+    """
+    data: Dict[str, Any] = {}
+
+    pattern = r"(?P<key>^[A-Za-z0-9\-]+):\s*(?P<value>.*)"
+    matches = re.finditer(pattern, manifest_content, re.MULTILINE)
+
+    for match in matches:
+        key = match.group("key").strip()
+        value = match.group("value").strip()
+
+        if key == "Java-Card-Applet-AID":
+            value = value.replace(":", "")
+
+        if key == "Classic-Package-AID":
+            value = value.replace("aid", "").replace("/", "")
+
+        elif key in ("Java-Card-Package-Version", "Runtime-Descriptor-Version"):
+            if key == "Runtime-Descriptor-Version" and len(value) < 3:
+                while len(value) < 3:
+                    value = tuple([*value, 0])
+
+        data[key] = value
+
+    return data
+
+
+def get_selected_manifest(manifest_dict: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """Extract selected fields from manifest."""
+    return {
+        "name": manifest_dict.get("Name", None),
+        "aid": manifest_dict.get("Java-Card-Applet-AID", None)
+        or manifest_dict.get("Classic-Package-AID", None),
+        "app_version": manifest_dict.get("Java-Card-Package-Version", None),
+        "jcop_version": manifest_dict.get("Runtime-Descriptor-Version", None),
+    }
+
+
+def resource_path(relative_path: str) -> str:
+    """Get absolute path to resource, works for dev and PyInstaller."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)

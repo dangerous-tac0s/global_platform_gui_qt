@@ -39,9 +39,181 @@ from PyQt5.QtCore import QTimer, Qt, QSize, QEvent
 from cryptography.exceptions import InvalidTag
 
 from dialogs.hex_input_dialog import HexInputDialog
-from file_thread import FileHandlerThread
-from nfc_thread import NFCHandlerThread, resource_path, DEFAULT_KEY
+from src.threads import FileHandlerThread, NFCHandlerThread, resource_path, DEFAULT_KEY
 from secure_storage import SecureStorage
+
+# MVC imports
+from src.controllers import CardController
+from src.services.storage_service import StorageService
+from src.models.card import CardIdentifier
+from src.events.event_bus import (
+    EventBus,
+    KeyPromptEvent,
+    KeyValidatedEvent,
+    CardStateChangedEvent,
+    StatusMessageEvent,
+    ErrorEvent,
+)
+from src.views.widgets.status_bar import MessageQueue
+from src.views.dialogs import KeyPromptDialog, ComboDialog
+
+
+class _StorageServiceAdapter:
+    """
+    Adapter to bridge existing SecureStorage to ISecureStorageService interface.
+
+    This allows the CardController to work with the existing secure storage
+    implementation until we fully migrate to StorageService.
+    """
+
+    def __init__(self, storage_instance, data):
+        self._instance = storage_instance
+        self._data = data or {"tags": {}}
+
+    def is_initialized(self) -> bool:
+        return self._data is not None
+
+    def load(self):
+        return self._data
+
+    def save(self, data=None):
+        if data:
+            self._data = data
+        if self._instance:
+            self._instance.save(self._data)
+
+    def get_key_for_tag(self, uid: str):
+        if not self._data:
+            return None
+        uid_normalized = uid.upper().replace(" ", "")
+        tags = self._data.get("tags", {})
+        tag_data = tags.get(uid_normalized)
+        if tag_data and "key" in tag_data:
+            return tag_data["key"]
+        return None
+
+    def set_key_for_tag(self, uid: str, key, name=None):
+        if not self._data:
+            self._data = {"tags": {}}
+        uid_normalized = uid.upper().replace(" ", "")
+        if "tags" not in self._data:
+            self._data["tags"] = {}
+        if uid_normalized not in self._data["tags"]:
+            self._data["tags"][uid_normalized] = {}
+        self._data["tags"][uid_normalized]["key"] = key
+        if name:
+            self._data["tags"][uid_normalized]["name"] = name
+
+    def get_tag_name(self, uid: str):
+        if not self._data:
+            return None
+        uid_normalized = uid.upper().replace(" ", "")
+        tags = self._data.get("tags", {})
+        tag_data = tags.get(uid_normalized)
+        if tag_data and "name" in tag_data:
+            return tag_data["name"]
+        return None
+
+    def get_key_for_card(self, identifier: CardIdentifier):
+        """CPLC-aware key lookup."""
+        if not self._data:
+            return None
+        tags = self._data.get("tags", {})
+
+        # Try CPLC hash first
+        if identifier.cplc_hash:
+            cplc_normalized = identifier.cplc_hash.upper()
+            if cplc_normalized in tags:
+                tag_data = tags[cplc_normalized]
+                if tag_data and "key" in tag_data:
+                    return tag_data["key"]
+
+        # Fall back to UID
+        if identifier.uid:
+            uid_normalized = identifier.uid.upper().replace(" ", "")
+            if uid_normalized in tags:
+                tag_data = tags[uid_normalized]
+                if tag_data and "key" in tag_data:
+                    return tag_data["key"]
+
+        return None
+
+    def get_name_for_card(self, identifier: CardIdentifier):
+        """CPLC-aware name lookup."""
+        if not self._data:
+            return None
+        tags = self._data.get("tags", {})
+
+        # Try CPLC hash first
+        if identifier.cplc_hash:
+            cplc_normalized = identifier.cplc_hash.upper()
+            if cplc_normalized in tags:
+                tag_data = tags[cplc_normalized]
+                if tag_data and "name" in tag_data:
+                    return tag_data["name"]
+
+        # Fall back to UID
+        if identifier.uid:
+            uid_normalized = identifier.uid.upper().replace(" ", "")
+            if uid_normalized in tags:
+                tag_data = tags[uid_normalized]
+                if tag_data and "name" in tag_data:
+                    return tag_data["name"]
+
+        return None
+
+    def set_key_for_card(self, identifier: CardIdentifier, key, name=None):
+        """CPLC-aware key storage."""
+        if not self._data:
+            self._data = {"tags": {}}
+        if "tags" not in self._data:
+            self._data["tags"] = {}
+
+        # Use CPLC hash as primary key if available
+        if identifier.cplc_hash:
+            primary_key = identifier.cplc_hash.upper()
+        elif identifier.uid:
+            primary_key = identifier.uid.upper().replace(" ", "")
+        else:
+            return
+
+        if primary_key not in self._data["tags"]:
+            self._data["tags"][primary_key] = {}
+
+        self._data["tags"][primary_key]["key"] = key
+
+        # Store UID as reference if using CPLC
+        if identifier.cplc_hash and identifier.uid:
+            self._data["tags"][primary_key]["uid"] = identifier.uid.upper().replace(" ", "")
+
+        if name:
+            self._data["tags"][primary_key]["name"] = name
+
+    def upgrade_to_cplc(self, old_uid: str, cplc_hash: str) -> bool:
+        """Migrate UID-based entry to CPLC."""
+        if not self._data:
+            return False
+        tags = self._data.get("tags", {})
+
+        uid_normalized = old_uid.upper().replace(" ", "")
+        cplc_normalized = cplc_hash.upper()
+
+        if uid_normalized not in tags:
+            return False
+
+        # Get existing entry
+        old_entry = tags[uid_normalized]
+
+        # Create new CPLC-keyed entry
+        new_entry = dict(old_entry)
+        new_entry["uid"] = uid_normalized
+        new_entry["migrated_from_uid"] = True
+
+        # Add new and remove old
+        tags[cplc_normalized] = new_entry
+        del tags[uid_normalized]
+
+        return True
 
 try:
     import keyring
@@ -156,28 +328,7 @@ def load_plugins():
     return plugin_map
 
 
-class MessageQueue:
-    def __init__(self, status_label):
-        self.status_label = status_label
-        self.queue = []
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.process_queue)
-
-    def add_message(self, message):
-        self.queue.append((message, self.calculate_timeout(message)))
-        if not self.timer.isActive():
-            self.process_queue()
-
-    def calculate_timeout(self, message):
-        return max(3000, len(message) * 50)
-
-    def process_queue(self):
-        if self.queue:
-            message, timeout = self.queue.pop(0)
-            self.status_label.setText(message)
-            self.timer.start(timeout)
-        else:
-            self.timer.stop()
+# MessageQueue is now imported from src.views.widgets.status_bar
 
 
 if os.name == "nt":
@@ -279,8 +430,8 @@ class GPManagerApp(QMainWindow):
         grid_layout.addWidget(self.uninstall_button, 2, 0)
 
         self.apps_grid_layout = grid_layout
-        # TODO: Installed app details/configuration
-        # self.installed_list.currentItemChanged.connect(self.show_installed_details_pane) # TODO: So configuration tools and or description
+        # Future enhancement: show configuration panel for installed apps
+        # self.installed_list.currentItemChanged.connect(self.show_installed_details_pane)
         self.available_list.currentItemChanged.connect(self.show_details_pane)
 
         self.layout.addLayout(self.apps_grid_layout)
@@ -317,6 +468,11 @@ class GPManagerApp(QMainWindow):
         else:
             # You can opt out... But I'm gonna ask every time.
             self.prompt_setup()
+
+        #
+        # Initialize CardController (MVC)
+        #
+        self._init_card_controller()
 
         #
         # 1) Load all plugins
@@ -434,6 +590,61 @@ class GPManagerApp(QMainWindow):
                 time.sleep(0.15)
 
         super().changeEvent(event)
+
+    def _init_card_controller(self):
+        """Initialize the CardController and subscribe to EventBus events."""
+        # Create a storage service wrapper for the CardController
+        # Note: We're using the existing secure_storage_instance for now
+        # In the future, this can use StorageService directly
+        storage_wrapper = _StorageServiceAdapter(self.secure_storage_instance, self.secure_storage)
+
+        # Create the CardController
+        self.card_controller = CardController(
+            storage_service=storage_wrapper,
+            config_service=None,  # Will be added when ConfigController is ready
+        )
+
+        # Get the EventBus singleton
+        self._event_bus = EventBus.instance()
+
+        # Subscribe to CardController events
+        self._event_bus.key_prompt.connect(self._on_key_prompt_event)
+        self._event_bus.key_validated.connect(self._on_key_validated_event)
+        self._event_bus.card_state.connect(self._on_card_state_changed_event)
+        self._event_bus.status_message.connect(self._on_status_message_event)
+        self._event_bus.error.connect(self._on_error_event)
+
+    def _on_key_prompt_event(self, event: KeyPromptEvent):
+        """Handle KeyPromptEvent from CardController."""
+        # Bridge to existing prompt_for_key method
+        self.prompt_for_key(event.uid, "")
+
+    def _on_key_validated_event(self, event: KeyValidatedEvent):
+        """Handle KeyValidatedEvent from CardController."""
+        if event.valid:
+            self.handle_tag_menu()
+        # Additional handling can be added here
+
+    def _on_card_state_changed_event(self, event: CardStateChangedEvent):
+        """Handle CardStateChangedEvent from CardController."""
+        # Update UI based on new card state
+        if event.state.is_authenticated:
+            self.install_button.setEnabled(True)
+            self.uninstall_button.setEnabled(True)
+        elif not event.state.is_connected:
+            self.install_button.setEnabled(False)
+            self.uninstall_button.setEnabled(False)
+
+    def _on_status_message_event(self, event: StatusMessageEvent):
+        """Handle StatusMessageEvent from EventBus."""
+        self.message_queue.add_message(event.message)
+
+    def _on_error_event(self, event: ErrorEvent):
+        """Handle ErrorEvent from EventBus."""
+        if not event.recoverable:
+            self.show_error_dialog(event.message)
+        else:
+            self.message_queue.add_message(f"Error: {event.message}")
 
     def handle_details_pane_back(self):
         # Remove the details pane
@@ -553,13 +764,15 @@ class GPManagerApp(QMainWindow):
             self.on_f4_pressed(event)
 
     def on_f1_pressed(self, event):
-        """
-        TODO: HELP! I NEED SOMEBODY! HELP! NOT JUST ANYBODY!
-        """
-        print(
-            "HELP! I NEED SOMEBODY!\nHELP! NOT JUST ANYBODY!\n\nWant to contribute to this project?"
+        """Show help dialog."""
+        help_text = (
+            "GlobalPlatform GUI - Smart Card Manager\n\n"
+            "Keyboard Shortcuts:\n"
+            "  F1 - Show this help\n"
+            "  F4 - Force refresh plugins\n\n"
+            "For more info, visit the project repository."
         )
-        pass
+        QMessageBox.information(self, "Help", help_text)
 
     def on_f4_pressed(self, event):
         """
@@ -732,9 +945,7 @@ class GPManagerApp(QMainWindow):
 
         self.message_queue.add_message(f"Installing: {cap_name}")
 
-        # TODO: better mutual exclusivity testing. Without this, trying to install U2F
-        #   with FIDO2 installed will result in an error and this app trying to do cleanup
-        #   from the b0rked install. This will remove the FIDO2 app--and all keys.
+        # Mutual exclusivity check (also handled by AppletController.validate_install)
         if "U2F" in cap_name and "FIDO2.cap" in self.installed_app_names:
             self.show_error_dialog("FIDO2 falls back to U2F--you do not need both.")
             return
@@ -903,7 +1114,7 @@ class GPManagerApp(QMainWindow):
 
         for raw_aid in installed_aids.keys():
             # e.g. 'A000000308000010000100'
-            version = installed_aids[raw_aid]  # TODO: rendering versions
+            version = installed_aids[raw_aid]
 
             norm = raw_aid.replace(" ", "").upper()
             matched_plugin_name = None
@@ -934,9 +1145,10 @@ class GPManagerApp(QMainWindow):
                 display_text = f"Unknown from {matched_plugin_name}: {raw_aid}"
             else:
                 display_text = f"Unknown: {raw_aid}"
-            # TODO: Handle showing versions.
-            # if version:
-            #     display_text += f" - v{version}"
+
+            # Show version if available
+            if version:
+                display_text += f" (v{version})"
 
             self.installed_list.addItem(display_text)
         self.populate_available_list()
@@ -1068,7 +1280,35 @@ class GPManagerApp(QMainWindow):
 
     def update_title_bar(self, message: str):
         if not "None" in message and len(message) > 0:
-            self.setWindowTitle(f"{message}")
+            # Try to replace card_id with user-provided name from secure storage
+            display_title = message
+            if self.nfc_thread and self.nfc_thread.current_identifier:
+                identifier = self.nfc_thread.current_identifier
+                card_id = identifier.primary_id
+
+                # Look up user-provided name in secure storage
+                # Priority: CPLC hash entry name -> UID entry name
+                name = None
+                if self.secure_storage:
+                    tags = self.secure_storage.get("tags", {})
+
+                    # Try CPLC hash first
+                    if identifier.cplc_hash:
+                        cplc_key = identifier.cplc_hash.upper()
+                        if cplc_key in tags and tags[cplc_key].get("name"):
+                            name = tags[cplc_key]["name"]
+
+                    # Fall back to UID
+                    if not name and identifier.uid:
+                        uid_key = identifier.uid.upper().replace(" ", "")
+                        if uid_key in tags and tags[uid_key].get("name"):
+                            name = tags[uid_key]["name"]
+
+                # Use name if it's different from the card_id (i.e., user set a custom name)
+                if name and name != card_id:
+                    display_title = message.replace(card_id, name)
+
+            self.setWindowTitle(display_title)
         else:
             self.setWindowTitle(APP_TITLE)
 
@@ -1326,6 +1566,10 @@ class GPManagerApp(QMainWindow):
         self.nfc_thread.resume()
 
     def load_config(self):
+        # Future: migrate to ConfigService for automatic versioning/migration
+        # from src.services.config_service import ConfigService
+        # self._config_service = ConfigService()
+        # return self._config_service.load().to_dict()
         if os.path.exists("config.json"):
             with open("config.json", "r") as fh:
                 try:
@@ -1351,6 +1595,7 @@ class GPManagerApp(QMainWindow):
             return DEFAULT_CONFIG
 
     def write_config(self):
+        # Future: migrate to ConfigService.save()
         with open("config.json", "w") as fh:
             json.dump(self.config, fh, indent=4)
 
@@ -1415,48 +1660,8 @@ class GPManagerApp(QMainWindow):
         self.write_config()
 
 
-class KeyDialog(QDialog):
-    def __init__(self, uid: str, exiting_key=None, is_new=True):
-        super().__init__()
-        if is_new:
-            dialog_title = "New Smart Card Found!"
-        else:
-            dialog_title = "Update Smart Card Key"
-
-        self.setWindowTitle(dialog_title)
-        layout = QFormLayout()
-
-        self.uid = uid
-
-        self.label = QLabel("Enter key:")
-        layout.addRow(self.label)
-
-        self.input_field = QLineEdit()
-
-        if exiting_key is None or exiting_key != "None":
-            self.input_field.setText(DEFAULT_KEY)
-        else:
-            self.input_field.setText(exiting_key)
-        layout.addRow(self.input_field)
-
-        self.reset = QPushButton("Reset to Default")
-        self.reset.clicked.connect(self.set_input_to_default)
-
-        self.submit = QPushButton("OK")
-        self.submit.clicked.connect(self.accept)
-
-        layout.addRow(self.reset, self.submit)
-        self.setLayout(layout)
-        self.setFixedWidth(800)
-
-    def get_input(self):
-        return self.input_field.text()
-
-    def get_results(self):
-        return {"uid": self.uid, "key": self.input_field.text()}
-
-    def set_input_to_default(self):
-        self.input_field.setText(DEFAULT_KEY)
+# KeyDialog removed - was unused (prompt_for_key uses HexInputDialog)
+# KeyPromptDialog is available in src.views.dialogs if needed
 
 
 def prompt_for_password(self):
@@ -1513,45 +1718,7 @@ def horizontal_rule():
     return h_line
 
 
-class ComboDialog(QDialog):
-    def __init__(
-        self,
-        options,
-        on_accept,
-        on_cancel,
-        parent=None,
-        window_title="Select Option",
-        combo_label="Choose an Option",
-    ):
-        super().__init__(parent)
-        self.setWindowTitle(window_title)
-
-        self.on_accept = on_accept
-        self.on_cancel = on_cancel
-
-        layout = QVBoxLayout(self)
-
-        self.combo = QComboBox()
-        self.combo.addItems(options)
-        layout.addWidget(QLabel(combo_label))
-        layout.addWidget(self.combo)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.handle_accept)
-        buttons.rejected.connect(self.handle_cancel)
-        layout.addWidget(buttons)
-
-        self.setLayout(layout)
-        self.setModal(True)  # Halts app while this is open
-
-    def handle_accept(self):
-        selected = self.combo.currentText()
-        self.on_accept(self, selected)
-        self.accept()
-
-    def handle_cancel(self):
-        self.on_cancel()
-        self.reject()
+# ComboDialog removed - now imported from src.views.dialogs
 
 
 if __name__ == "__main__":

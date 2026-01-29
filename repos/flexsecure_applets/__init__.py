@@ -5,7 +5,7 @@ import os.path
 import requests
 
 from base_plugin import BaseAppletPlugin
-from nfc_thread import resource_path
+from src.threads import resource_path
 
 """
 flexsecure_applets plugin: Manages all .cap files and their associated AIDs for the

@@ -4,7 +4,7 @@ import os
 import importlib
 from abc import ABC, abstractmethod
 
-from nfc_thread import resource_path
+from src.threads import resource_path
 
 
 # override_map = {}

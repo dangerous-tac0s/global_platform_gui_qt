@@ -3,7 +3,7 @@ Unit tests for model classes.
 """
 
 import pytest
-from src.models.card import CardState, CardInfo, CardMemory, CardConnectionState
+from src.models.card import CardState, CardInfo, CardMemory, CardConnectionState, CardIdentifier
 from src.models.applet import AppletInfo, InstalledApplet, InstallResult, InstallStatus
 from src.models.config import ConfigData, WindowConfig, PluginCache
 import time
@@ -14,8 +14,14 @@ class TestCardModels:
 
     def test_card_info_normalizes_uid(self):
         """UID should be normalized to uppercase without spaces."""
-        info = CardInfo(uid="04 aa bb cc dd")
+        # CardInfo now takes identifier parameter, supports legacy string construction
+        info = CardInfo(identifier="04 aa bb cc dd")
         assert info.uid == "04AABBCCDD"
+
+        # Also test with CardIdentifier directly
+        identifier = CardIdentifier(uid="04 aa bb cc dd")
+        info2 = CardInfo(identifier=identifier)
+        assert info2.uid == "04AABBCCDD"
 
     def test_card_memory_is_available(self):
         """Memory should report as available when values are set."""
