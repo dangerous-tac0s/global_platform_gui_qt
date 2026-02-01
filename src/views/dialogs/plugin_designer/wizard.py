@@ -325,23 +325,35 @@ class IntroPage(QWizardPage):
         layout.addStretch()
 
     def initializePage(self):
-        """Pre-fill from source data if available."""
+        """Pre-fill from source data or loaded plugin data."""
         wizard = self.wizard()
         if not wizard:
             return
 
-        # Try to get GitHub repo info
+        # Load from plugin data (for editing)
+        plugin_name = wizard.get_plugin_value("plugin.name", "")
+        if plugin_name and not self._name_edit.text():
+            self._name_edit.setText(plugin_name)
+
+        plugin_desc = wizard.get_plugin_value("plugin.description", "")
+        if plugin_desc and not self._desc_edit.toPlainText():
+            self._desc_edit.setPlainText(plugin_desc)
+
+        plugin_version = wizard.get_plugin_value("plugin.version", "")
+        if plugin_version and plugin_version != "1.0.0":
+            self._version_edit.setText(plugin_version)
+
+        plugin_author = wizard.get_plugin_value("plugin.author", "")
+        if plugin_author and not self._author_edit.text():
+            self._author_edit.setText(plugin_author)
+
+        # Try to get GitHub repo info (for new plugins from GitHub)
         repo_info = wizard.get_plugin_value("_github_repo_info")
         if repo_info:
-            # Pre-fill name from repo name (if not already set)
             if not self._name_edit.text() and repo_info.get("name"):
                 self._name_edit.setText(repo_info["name"])
-
-            # Pre-fill description from repo description
             if not self._desc_edit.toPlainText() and repo_info.get("description"):
                 self._desc_edit.setPlainText(repo_info["description"])
-
-            # Pre-fill author from repo owner
             if not self._author_edit.text() and repo_info.get("owner"):
                 self._author_edit.setText(repo_info["owner"])
 
