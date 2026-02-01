@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
 )
 from PyQt5.QtCore import QTimer, Qt, QSize, QEvent
+import sip
 from cryptography.exceptions import InvalidTag
 
 from dialogs.hex_input_dialog import HexInputDialog
@@ -56,6 +57,7 @@ from src.events.event_bus import (
 )
 from src.views.widgets.status_bar import MessageQueue
 from src.views.dialogs import KeyPromptDialog, ComboDialog
+from src.views.dialogs.plugin_designer import PluginDesignerWizard
 
 
 class _StorageServiceAdapter:
@@ -279,13 +281,30 @@ except ImportError:
         pass
 
 
+def get_plugin_instance(plugin_cls_or_instance):
+    """
+    Get a plugin instance from either a class or existing instance.
+
+    For Python plugins, we store classes and need to instantiate.
+    For YAML plugins, we store adapter instances directly.
+    """
+    if isinstance(plugin_cls_or_instance, type):
+        return plugin_cls_or_instance()
+    return plugin_cls_or_instance
+
+
 def load_plugins():
     """
-    Scan the /repos folder for subfolders containing __init__.py
-    that define a class subclassing BaseAppletPlugin.
+    Scan the /repos and /plugins folders for plugins.
 
-    Returns a dict plugin_map: { plugin_name: plugin_class }.
-    E.g. { "flexsecure_applets": <class FlexsecureAppletsPlugin>, ... }
+    Loads both:
+    - Python plugins (subfolders with __init__.py defining BaseAppletPlugin subclass)
+    - YAML plugins (.yaml/.yml files with valid plugin schema)
+
+    Returns a dict plugin_map: { plugin_name: plugin_class_or_adapter }.
+    E.g. { "flexsecure_applets": <class FlexsecureAppletsPlugin>, "smartpgp": <YamlPluginAdapter>, ... }
+
+    Note: All plugins are loaded. Use get_enabled_plugins() to filter by disabled list.
     """
     plugin_map = {}
     repos_dir = os.path.join(os.path.dirname(__file__), "repos")  # included
@@ -294,10 +313,11 @@ def load_plugins():
     print(plugins_dir)
     dirs = [repos_dir, plugins_dir]
 
+    # Load Python plugins
     for d in dirs:
         if not os.path.isdir(d):
             print(f"No /{dir_to_name_map[d]} folder found, skipping plugin load.")
-            return plugin_map
+            continue
 
         for repo_name in os.listdir(d):
             repo_path = os.path.join(d, repo_name)
@@ -325,6 +345,31 @@ def load_plugins():
                                 plugin_map[instance.name] = attr
                     except Exception as e:
                         print(f"Error importing {mod_path}: {e}")
+
+    # Load YAML plugins
+    try:
+        from src.plugins.yaml.loader import YamlPluginLoader
+        base_dir = os.path.dirname(__file__)
+        loader = YamlPluginLoader(base_dir)
+        yaml_plugins = loader.discover()
+
+        for plugin_name, adapter in yaml_plugins.items():
+            if plugin_name in plugin_map:
+                print(f"Warning: YAML plugin '{plugin_name}' conflicts with existing plugin, skipping")
+            else:
+                # Store the adapter instance (it implements BaseAppletPlugin interface)
+                plugin_map[plugin_name] = adapter
+                print(f"Loaded YAML plugin: {plugin_name}")
+
+        # Report any loading errors
+        for path, error in loader.get_errors():
+            print(f"Error loading YAML plugin {path}: {error}")
+
+    except ImportError as e:
+        print(f"YAML plugin system not available: {e}")
+    except Exception as e:
+        print(f"Error loading YAML plugins: {e}")
+
     return plugin_map
 
 
@@ -364,8 +409,15 @@ class GPManagerApp(QMainWindow):
         self.menu_bar = self.menuBar()
 
         file_menu = self.menu_bar.addMenu("File")
+
+        create_plugin_action = QAction("Create Plugin...", self)
+        create_plugin_action.triggered.connect(self.show_plugin_designer)
+        file_menu.addAction(create_plugin_action)
+
+        file_menu.addSeparator()
+
         settings_action = QAction("Settings", self)
-        settings_action.setEnabled(False)
+        settings_action.triggered.connect(self.show_settings)
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.quit_app)
         file_menu.addAction(settings_action)
@@ -395,6 +447,10 @@ class GPManagerApp(QMainWindow):
         self.config = self.load_config()
         self.write_config()
 
+        # Initialize debug logging from config
+        from src.plugins.yaml import set_debug_enabled
+        set_debug_enabled(self.config.get("show_debug", False))
+
         self.resize(self.config["window"]["width"], self.config["window"]["height"])
         self.write_config()
         self.key = None
@@ -420,19 +476,19 @@ class GPManagerApp(QMainWindow):
         grid_layout.addWidget(QLabel("Available Apps"), 0, 1)
         grid_layout.addWidget(self.available_list, 1, 1)
 
-        # Buttons
-        self.install_button = QPushButton("Install")
-        self.install_button.clicked.connect(self.install_app)
-        grid_layout.addWidget(self.install_button, 2, 1)
-
-        self.uninstall_button = QPushButton("Uninstall")
-        self.uninstall_button.clicked.connect(self.uninstall_app)
-        grid_layout.addWidget(self.uninstall_button, 2, 0)
+        # No static buttons - contextual buttons appear in details pane
+        self._action_buttons_enabled = False
+        self._selected_app_name = None
+        self._selected_is_installed = False
 
         self.apps_grid_layout = grid_layout
-        # Future enhancement: show configuration panel for installed apps
-        # self.installed_list.currentItemChanged.connect(self.show_installed_details_pane)
-        self.available_list.currentItemChanged.connect(self.show_details_pane)
+        # Connect both lists to show details pane with contextual buttons
+        self.installed_list.currentItemChanged.connect(
+            lambda item: self._on_app_selected(item, is_installed=True)
+        )
+        self.available_list.currentItemChanged.connect(
+            lambda item: self._on_app_selected(item, is_installed=False)
+        )
 
         self.layout.addLayout(self.apps_grid_layout)
 
@@ -485,13 +541,20 @@ class GPManagerApp(QMainWindow):
 
         #
         # 2) Build a combined {cap_name: (plugin_name, download_url)}
-        #    from each plugin
+        #    from ALL plugins (needed for management of installed apps)
+        #    Filtering for "available for install" happens in populate_available_list()
         #
-        self.available_apps_info = {}
+        self.available_apps_info = {}  # {cap_name: (plugin_name, url)} - active provider
+        self.cap_providers = {}  # {cap_name: [(plugin_name, url), ...]} - all providers
         self.app_descriptions = {}
         self.storage = {}
-        for plugin_name, plugin_cls in self.plugin_map.items():
-            plugin_instance = plugin_cls()
+        disabled_plugins = self._get_disabled_plugins()
+        for plugin_name, plugin_cls_or_instance in self.plugin_map.items():
+            # Handle both class (Python plugins) and instance (YAML plugins)
+            if isinstance(plugin_cls_or_instance, type):
+                plugin_instance = plugin_cls_or_instance()
+            else:
+                plugin_instance = plugin_cls_or_instance
             plugin_instance.load_storage()
             if (
                 not self.config["last_checked"].get(plugin_name, False)
@@ -530,8 +593,34 @@ class GPManagerApp(QMainWindow):
                 self.config["last_checked"][plugin_name]["apps"] = caps
                 self.write_config()
 
+                # For YAML plugins using cached data, set cap names for AID matching
+                if hasattr(plugin_instance, 'set_cached_cap_names'):
+                    plugin_instance.set_cached_cap_names(list(caps.keys()))
+
             for cap_n, url in caps.items():
-                self.available_apps_info[cap_n] = (plugin_name, url)
+                # Track all providers for this CAP
+                if cap_n not in self.cap_providers:
+                    self.cap_providers[cap_n] = []
+                self.cap_providers[cap_n].append((plugin_name, url))
+
+                # Check for conflict with existing provider
+                if cap_n in self.available_apps_info:
+                    existing_plugin, _ = self.available_apps_info[cap_n]
+                    # Only warn if both plugins are enabled
+                    if existing_plugin not in disabled_plugins and plugin_name not in disabled_plugins:
+                        self.message_queue.add_message(
+                            f"Plugin conflict: '{cap_n}' provided by both "
+                            f"'{existing_plugin}' and '{plugin_name}'. "
+                            f"Disable one in Settings > Plugins."
+                        )
+                    # Use the enabled plugin, or prefer YAML plugins (loaded last)
+                    if existing_plugin in disabled_plugins:
+                        self.available_apps_info[cap_n] = (plugin_name, url)
+                    elif plugin_name not in disabled_plugins:
+                        # Both enabled - YAML (loaded last) takes precedence
+                        self.available_apps_info[cap_n] = (plugin_name, url)
+                else:
+                    self.available_apps_info[cap_n] = (plugin_name, url)
 
             descriptions = plugin_instance.get_descriptions()
 
@@ -566,9 +655,8 @@ class GPManagerApp(QMainWindow):
         self.nfc_thread.key_setter_signal.connect(self.nfc_thread.key_setter)
         self.nfc_thread.cplc_retrieved_signal.connect(self.on_cplc_retrieved)
 
-        # Initially disable install/uninstall
-        self.install_button.setEnabled(False)
-        self.uninstall_button.setEnabled(False)
+        # Initially disable action buttons
+        self._update_action_buttons_state(False)
         self.current_plugin = None
 
         self.nfc_thread.start()
@@ -629,11 +717,9 @@ class GPManagerApp(QMainWindow):
         """Handle CardStateChangedEvent from CardController."""
         # Update UI based on new card state
         if event.state.is_authenticated:
-            self.install_button.setEnabled(True)
-            self.uninstall_button.setEnabled(True)
+            self._update_action_buttons_state(True)
         elif not event.state.is_connected:
-            self.install_button.setEnabled(False)
-            self.uninstall_button.setEnabled(False)
+            self._update_action_buttons_state(False)
 
     def _on_status_message_event(self, event: StatusMessageEvent):
         """Handle StatusMessageEvent from EventBus."""
@@ -647,64 +733,206 @@ class GPManagerApp(QMainWindow):
             self.message_queue.add_message(f"Error: {event.message}")
 
     def handle_details_pane_back(self):
-        # Remove the details pane
-        items = [
-            self.apps_grid_layout.itemAtPosition(0, 0),
-            self.apps_grid_layout.itemAtPosition(2, 0),
-        ]
-        for item in items:
+        """Remove the details pane and restore installed apps list."""
+        # Clear selection state
+        self._selected_app_name = None
+        self._selected_is_installed = False
+
+        # Remove the details pane widgets
+        for row in range(0, 3):
+            item = self.apps_grid_layout.itemAtPosition(row, 0)
             if item:
                 widget = item.widget()
                 if widget:
                     self.apps_grid_layout.removeWidget(widget)
                     widget.setParent(None)
 
-        # Replace with the appropriate widgets
+        # Restore the installed apps list
         self.apps_grid_layout.addWidget(QLabel("Installed Apps"), 0, 0)
         self.apps_grid_layout.addWidget(self.installed_list, 1, 0)
-        self.apps_grid_layout.addWidget(self.uninstall_button, 2, 0)
+        # Row 2, col 0 stays empty - buttons are in details pane only
 
-    def show_details_pane(self, changed_list):
-        """
-        Swaps installed/available columns for details pane
-        """
-        if changed_list is None:
+    def _on_app_selected(self, item, is_installed: bool):
+        """Handle app selection from either installed or available list."""
+        if item is None:
             return
-        selected_app = changed_list.text()
 
-        if self.app_descriptions.get(selected_app) is None:
-            return  # description is missing
+        # Clear selection in the other list to avoid confusion
+        if is_installed:
+            self.available_list.clearSelection()
+        else:
+            self.installed_list.clearSelection()
 
-        is_showing_details = False
+        app_name = item.text()
+        # Strip version suffix if present (e.g., "App.cap (v1.0)" -> "App.cap")
+        if " (v" in app_name:
+            app_name = app_name.split(" (v")[0]
 
-        viewer = QTextBrowser()
-        viewer.setOpenExternalLinks(True)
-        viewer.setHtml(
-            markdown.markdown(textwrap.dedent(self.app_descriptions[selected_app]))
+        self._selected_app_name = app_name
+        self._selected_is_installed = is_installed
+
+        # Show details pane with contextual buttons
+        self._show_app_details(app_name, is_installed)
+
+    def _show_app_details(self, app_name: str, is_installed: bool):
+        """Show details pane with app info and contextual action buttons."""
+        # Check if we have a description for this app
+        description = self.app_descriptions.get(app_name, "")
+
+        # Create content widget
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Markdown viewer for description
+        if description:
+            viewer = QTextBrowser()
+            viewer.setOpenExternalLinks(True)
+            viewer.setHtml(markdown.markdown(textwrap.dedent(description)))
+            content_layout.addWidget(viewer)
+        else:
+            # No description - show app name
+            label = QLabel(f"<b>{app_name}</b>")
+            label.setWordWrap(True)
+            content_layout.addWidget(label)
+            content_layout.addStretch()
+
+        # Action buttons row
+        button_row = QHBoxLayout()
+
+        # Main action button (Install or Uninstall)
+        if is_installed:
+            action_btn = QPushButton("Uninstall")
+            action_btn.clicked.connect(self.uninstall_app)
+        else:
+            action_btn = QPushButton("Install")
+            action_btn.clicked.connect(self.install_app)
+
+        action_btn.setEnabled(self._action_buttons_enabled)
+        self._current_action_btn = action_btn
+        button_row.addWidget(action_btn)
+
+        # Manage button (only if plugin has management UI)
+        manage_btn = None
+        if is_installed and self._plugin_has_management_ui(app_name):
+            manage_btn = QPushButton("Manage")
+            # Capture app_name by value using default argument to avoid closure bug
+            manage_btn.clicked.connect(lambda checked=False, name=app_name: self._show_management_dialog(name))
+            manage_btn.setEnabled(self._action_buttons_enabled)
+            self._current_manage_btn = manage_btn
+            button_row.addWidget(manage_btn)
+        else:
+            self._current_manage_btn = None
+
+        button_row.addStretch()
+
+        # Back button
+        back_btn = QPushButton("Back")
+        back_btn.clicked.connect(self.handle_details_pane_back)
+        button_row.addWidget(back_btn)
+
+        content_layout.addLayout(button_row)
+
+        # Check if details pane is already showing
+        is_showing_details = (
+            self.apps_grid_layout.itemAtPosition(1, 0) and
+            self.apps_grid_layout.itemAtPosition(1, 0).widget() != self.installed_list
         )
 
-        if self.apps_grid_layout.itemAtPosition(1, 0).widget() != self.installed_list:
-            is_showing_details = True
+        # Remove existing widgets in column 0
+        for row in range(0, 3):
+            item = self.apps_grid_layout.itemAtPosition(row, 0)
+            if item:
+                widget = item.widget()
+                if widget:
+                    self.apps_grid_layout.removeWidget(widget)
+                    widget.setParent(None)
 
-        if not is_showing_details:
-            for row in range(0, 3):
-                item = self.apps_grid_layout.itemAtPosition(row, 0)
-                if item:
-                    widget = item.widget()
-                    if widget:
-                        self.apps_grid_layout.removeWidget(widget)
-                        widget.setParent(None)
+        # Add the new content
+        self.apps_grid_layout.addWidget(content_widget, 0, 0, 3, 1)
 
-            self.apps_grid_layout.addWidget(viewer, 0, 0, 2, 1)
-            back_button = QPushButton("Back")
-            back_button.clicked.connect(self.handle_details_pane_back)
+    def _get_disabled_plugins(self) -> set:
+        """Get set of disabled plugin names."""
+        return set(self.config.get("disabled_plugins", []))
 
-            self.apps_grid_layout.addWidget(back_button, 2, 0)
+    def _plugin_has_management_ui(self, app_name: str) -> bool:
+        """Check if the plugin for this app has management UI.
+
+        Note: This allows managing apps even from disabled plugins,
+        since the app is already installed on the card.
+        """
+        if app_name not in self.available_apps_info:
+            return False
+
+        plugin_name, _ = self.available_apps_info[app_name]
+        if plugin_name not in self.plugin_map:
+            return False
+
+        plugin = get_plugin_instance(self.plugin_map[plugin_name])
+
+        # Check for YAML plugin with management UI
+        if hasattr(plugin, 'has_management_ui'):
+            return plugin.has_management_ui()
+
+        # Check for Python plugin with management actions
+        if hasattr(plugin, 'get_management_actions'):
+            actions = plugin.get_management_actions()
+            return len(actions) > 0
+
+        return False
+
+    def _show_management_dialog(self, app_name: str):
+        """Show the management dialog for an installed app."""
+        if app_name not in self.available_apps_info:
+            self.message_queue.add_message(f"No plugin info for {app_name}")
+            return
+
+        plugin_name, _ = self.available_apps_info[app_name]
+        if plugin_name not in self.plugin_map:
+            self.message_queue.add_message(f"Plugin not found: {plugin_name}")
+            return
+
+        plugin = get_plugin_instance(self.plugin_map[plugin_name])
+
+        # Find the actual installed AID for this cap
+        installed_aid = None
+        installed_apps = self.nfc_thread.get_installed_apps()
+        if installed_apps:
+            for raw_aid in installed_apps.keys():
+                # Check if this AID maps to the cap we're managing
+                if hasattr(plugin, 'get_cap_for_aid'):
+                    cap = plugin.get_cap_for_aid(raw_aid)
+                    if cap == app_name:
+                        installed_aid = raw_aid.replace(" ", "").upper()
+                        break
+
+        # Try to create management dialog
+        if hasattr(plugin, 'create_management_dialog'):
+            try:
+                dialog = plugin.create_management_dialog(
+                    nfc_service=self.nfc_thread,
+                    parent=self,
+                    installed_aid=installed_aid
+                )
+                if dialog:
+                    dialog.exec_()
+                else:
+                    self.message_queue.add_message("No management options available")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to open management: {e}")
         else:
-            self.apps_grid_layout.removeWidget(
-                self.apps_grid_layout.itemAtPosition(0, 0).widget()
-            )
-            self.apps_grid_layout.addWidget(viewer, 0, 0, 2, 1)
+            self.message_queue.add_message("Management not supported for this plugin")
+
+    def _update_action_buttons_state(self, enabled: bool):
+        """Update the enabled state of action buttons."""
+        self._action_buttons_enabled = enabled
+        # Check if buttons exist and haven't been deleted by Qt
+        if hasattr(self, '_current_action_btn') and self._current_action_btn:
+            if not sip.isdeleted(self._current_action_btn):
+                self._current_action_btn.setEnabled(enabled)
+        if hasattr(self, '_current_manage_btn') and self._current_manage_btn:
+            if not sip.isdeleted(self._current_manage_btn):
+                self._current_manage_btn.setEnabled(enabled)
 
     def handle_tag_menu(self):
         if self.nfc_thread.key:
@@ -719,8 +947,8 @@ class GPManagerApp(QMainWindow):
     def update_plugin_releases(self):
         self.message_queue.add_message("Fetching latest plugin releases...")
         updated = False
-        for plugin_name, plugin_cls in self.plugin_map.items():
-            plugin_instance = plugin_cls()
+        for plugin_name, plugin_cls_or_instance in self.plugin_map.items():
+            plugin_instance = get_plugin_instance(plugin_cls_or_instance)
             caps = plugin_instance.fetch_available_caps()
             plugin_instance.load_storage()
 
@@ -735,9 +963,27 @@ class GPManagerApp(QMainWindow):
 
                 self.write_config()
 
-                # Update the available list
+                # Update the available list (track all providers)
+                disabled_plugins = self._get_disabled_plugins()
                 for cap_n, url in caps.items():
-                    self.available_apps_info[cap_n] = (plugin_name, url)
+                    # Track provider
+                    if cap_n not in self.cap_providers:
+                        self.cap_providers[cap_n] = []
+                    # Update existing entry or add new
+                    provider_entry = (plugin_name, url)
+                    existing = [(p, u) for p, u in self.cap_providers[cap_n] if p == plugin_name]
+                    if existing:
+                        # Update URL for existing provider
+                        self.cap_providers[cap_n] = [
+                            (p, url if p == plugin_name else u)
+                            for p, u in self.cap_providers[cap_n]
+                        ]
+                    else:
+                        self.cap_providers[cap_n].append(provider_entry)
+
+                    # Update active provider if this one is enabled
+                    if plugin_name not in disabled_plugins:
+                        self.available_apps_info[cap_n] = (plugin_name, url)
 
                 # Update descriptions
                 descriptions = plugin_instance.get_descriptions()
@@ -799,9 +1045,67 @@ class GPManagerApp(QMainWindow):
                 self.nfc_thread.start()
         self.on_operation_complete(True, "Forced update completed.")
 
+    def show_plugin_designer(self):
+        """Show the YAML plugin designer wizard."""
+        wizard = PluginDesignerWizard(self)
+        wizard.plugin_created.connect(self.on_plugin_created)
+        wizard.exec_()
+
+    def on_plugin_created(self, yaml_content: str, save_path: str):
+        """Handle a new plugin being created."""
+        if save_path:
+            self.message_queue.add_message(f"Plugin created: {save_path}")
+            # Reload plugins to pick up the new one
+            self.update_plugin_releases()
+        else:
+            self.message_queue.add_message("Plugin YAML generated (not saved)")
+
+    def show_settings(self):
+        """Show the settings dialog."""
+        from src.views.dialogs.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(self.plugin_map, self.config, self)
+        dialog.refresh_plugins_requested.connect(self._refresh_plugins_after_settings)
+
+        if dialog.exec_() == dialog.Accepted:
+            # Update config with settings
+            self.config = dialog.get_config()
+            self.write_config()
+
+            if dialog.needs_restart():
+                QMessageBox.information(
+                    self,
+                    "Restart Required",
+                    "Plugin changes will take effect after restarting the application."
+                )
+
+    def _refresh_plugins_after_settings(self):
+        """Reload plugins after settings changes (add/edit/delete)."""
+        # Reload plugin map
+        self.plugin_map = load_plugins()
+        if self.plugin_map:
+            print("Reloaded plugins:", list(self.plugin_map.keys()))
+
     def populate_available_list(self):
         self.available_list.clear()
+        disabled_plugins = self._get_disabled_plugins()
+
         for cap_name, (plugin_name, url) in self.available_apps_info.items():
+            # Check if current provider is disabled
+            if plugin_name in disabled_plugins:
+                # Look for an enabled alternative provider
+                alternative_found = False
+                if cap_name in self.cap_providers:
+                    for alt_plugin, alt_url in self.cap_providers[cap_name]:
+                        if alt_plugin not in disabled_plugins:
+                            # Update to use enabled provider
+                            self.available_apps_info[cap_name] = (alt_plugin, alt_url)
+                            plugin_name = alt_plugin
+                            alternative_found = True
+                            break
+                if not alternative_found:
+                    continue  # All providers disabled, skip this CAP
+
             if cap_name in unsupported_apps or cap_name in self.installed_app_names:
                 continue
             self.available_list.addItem(cap_name)
@@ -820,8 +1124,7 @@ class GPManagerApp(QMainWindow):
             self.reader_dropdown.setDisabled(True)
             self.nfc_thread.selected_reader_name = None
             self.message_queue.add_message("No readers found.")
-            self.install_button.setEnabled(False)
-            self.uninstall_button.setEnabled(False)
+            self._update_action_buttons_state(False)
             self.reader_dropdown.blockSignals(False)
             return
 
@@ -864,18 +1167,15 @@ class GPManagerApp(QMainWindow):
                     ):
                         self.secure_storage["tags"][uid]["key"] = self.nfc_thread.key
 
-                    self.install_button.setEnabled(True)
-                    self.uninstall_button.setEnabled(True)
+                    self._update_action_buttons_state(True)
                     installed = self.nfc_thread.get_installed_apps()
                     if installed is not None:
                         self.on_installed_apps_updated(installed)
             else:
-                self.install_button.setEnabled(False)
-                self.uninstall_button.setEnabled(False)
+                self._update_action_buttons_state(False)
                 self.message_queue.add_message("Unsupported card present.")
         else:
-            self.install_button.setEnabled(False)
-            self.uninstall_button.setEnabled(False)
+            self._update_action_buttons_state(False)
             self.message_queue.add_message("No card present.")
 
     def process_nfc_status(self, status):
@@ -905,8 +1205,17 @@ class GPManagerApp(QMainWindow):
             return
 
         plugin_name, dl_url = self.available_apps_info[cap_name]
+
+        # Get extract_pattern from plugin if available (for ZIP sources)
+        extract_pattern = None
+        if plugin_name in self.plugin_map:
+            plugin = get_plugin_instance(self.plugin_map[plugin_name])
+            if hasattr(plugin, 'get_extract_pattern'):
+                extract_pattern = plugin.get_extract_pattern()
+
         self.downloader = FileHandlerThread(
-            cap_name, dl_url, output_dir=CAP_DOWNLOAD_DIR
+            cap_name, dl_url, output_dir=CAP_DOWNLOAD_DIR,
+            extract_pattern=extract_pattern
         )
 
         self.downloader.download_progress.connect(self.on_download_progress)
@@ -919,8 +1228,7 @@ class GPManagerApp(QMainWindow):
         self.download_bar.setValue(0)
         self.download_bar.show()
 
-        self.install_button.setEnabled(False)
-        self.uninstall_button.setEnabled(False)
+        self._update_action_buttons_state(False)
         self.downloader.start()
 
     def on_download_progress(self, pct):
@@ -929,8 +1237,7 @@ class GPManagerApp(QMainWindow):
     def on_download_error(self, err_msg):
         self.download_bar.hide()
         self.download_bar.setValue(0)
-        self.install_button.setEnabled(True)
-        self.uninstall_button.setEnabled(True)
+        self._update_action_buttons_state(True)
         self.show_error_dialog(err_msg)
 
     #
@@ -982,22 +1289,22 @@ class GPManagerApp(QMainWindow):
 
         plugin_name, _ = self.available_apps_info[cap_name]
         if plugin_name in self.plugin_map:
-            plugin_cls = self.plugin_map[plugin_name]
-            plugin = plugin_cls()
+            plugin = get_plugin_instance(self.plugin_map[plugin_name])
             plugin.set_cap_name(cap_name)
-
-            # Possibly run pre_install
-            try:
-                plugin.pre_install(nfc_thread=self.nfc_thread)
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Pre-install error: {e}")
-                return
 
             dlg = plugin.create_dialog(self)
             if dlg and dlg.exec_() == dlg.Accepted:
                 self.current_plugin = plugin
                 result_data = plugin.get_result()
                 print("Plugin result:", result_data)
+
+                # Run pre_install hook after dialog is accepted (with field values)
+                try:
+                    plugin.pre_install(nfc_thread=self.nfc_thread)
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Pre-install error: {e}")
+                    return
+
                 self.fetch_file(
                     cap_name, self.on_install_download_complete, params=result_data
                 )
@@ -1007,6 +1314,14 @@ class GPManagerApp(QMainWindow):
             else:
                 # no dialog => simple flow
                 self.current_plugin = plugin
+
+                # Run pre_install hook for plugins without dialog
+                try:
+                    plugin.pre_install(nfc_thread=self.nfc_thread)
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Pre-install error: {e}")
+                    return
+
                 self.fetch_file(cap_name, self.on_install_download_complete)
         else:
             # No plugin found => but we handle gracefully
@@ -1026,7 +1341,11 @@ class GPManagerApp(QMainWindow):
         if not selected:
             return
         # Assume the installed list displays the .cap filename (or "Unknown: <aid>")
+        # May have version suffix like "(v1.0)" which needs to be stripped
         cap_name = selected[0].text()
+        # Strip version suffix if present (e.g., "App.cap (v1.0)" -> "App.cap")
+        if " (v" in cap_name:
+            cap_name = cap_name.split(" (v")[0]
 
         # If the entry indicates an unknown app (i.e. no plugin info), fallback to uninstall by AID.
         if "Unknown" in cap_name:
@@ -1041,8 +1360,7 @@ class GPManagerApp(QMainWindow):
 
         plugin_name, _ = self.available_apps_info[cap_name]
         if plugin_name in self.plugin_map:
-            plugin_cls = self.plugin_map[plugin_name]
-            plugin = plugin_cls()
+            plugin = get_plugin_instance(self.plugin_map[plugin_name])
             plugin.set_cap_name(cap_name)
             try:
                 plugin.pre_uninstall()  # Use pre_install (or pre_uninstall, if defined) for checks.
@@ -1082,8 +1400,7 @@ class GPManagerApp(QMainWindow):
         self.download_bar.hide()
         self.download_bar.setValue(0)
         if self.nfc_thread.key is not None:
-            self.install_button.setEnabled(True)
-            self.uninstall_button.setEnabled(True)
+            self._update_action_buttons_state(True)
 
         if message is None:
             self.message_queue.add_message("Ready.")
@@ -1109,6 +1426,11 @@ class GPManagerApp(QMainWindow):
         We must iterate installed_aids.keys() or items().
         """
         self.handle_tag_menu()
+
+        # Hide details pane and restore installed apps list view
+        # This ensures the UI returns to the list after install/uninstall
+        self.handle_details_pane_back()
+
         self.installed_list.clear()
         self.installed_app_names = []
 
@@ -1120,8 +1442,8 @@ class GPManagerApp(QMainWindow):
             matched_plugin_name = None
             matched_cap = None
 
-            for pname, plugin_cls in self.plugin_map.items():
-                tmp = plugin_cls()
+            for pname, plugin_cls_or_instance in self.plugin_map.items():
+                tmp = get_plugin_instance(plugin_cls_or_instance)
                 if hasattr(tmp, "get_cap_for_aid"):
                     cap = tmp.get_cap_for_aid(raw_aid)
                     if cap:
