@@ -31,6 +31,8 @@ from .utils import (
     parse_github_url,
     fetch_github_repo_info,
     fetch_github_release_assets,
+    fetch_github_plugin_definition,
+    fetch_github_release_plugin_definition,
     download_file,
     parse_cap_file,
     show_open_file_dialog,
@@ -51,6 +53,7 @@ class SourceConfigPage(QWizardPage):
         # For multiple CAPs: {filename: {"url": str, "metadata": CapMetadata}}
         self._available_caps = {}
         self._source_validated = False  # Track if source has been validated
+        self._discovered_plugin = None  # (filename, plugin_data) if found
         self._setup_ui()
 
     def _setup_ui(self):
@@ -179,6 +182,32 @@ class SourceConfigPage(QWizardPage):
 
         layout.addWidget(self._options_stack)
 
+        # Plugin definition discovery notification (hidden by default)
+        self._plugin_found_group = QGroupBox("Plugin Definition Found")
+        self._plugin_found_group.setStyleSheet(
+            "QGroupBox { background-color: #e8f5e9; border: 1px solid #4caf50; border-radius: 4px; }"
+        )
+        self._plugin_found_group.hide()
+        plugin_found_layout = QVBoxLayout(self._plugin_found_group)
+
+        self._plugin_found_label = QLabel()
+        self._plugin_found_label.setWordWrap(True)
+        plugin_found_layout.addWidget(self._plugin_found_label)
+
+        plugin_btn_layout = QHBoxLayout()
+        self._import_plugin_btn = QPushButton("Import Plugin Definition")
+        self._import_plugin_btn.clicked.connect(self._import_discovered_plugin)
+        plugin_btn_layout.addWidget(self._import_plugin_btn)
+
+        self._skip_plugin_btn = QPushButton("Continue Manually")
+        self._skip_plugin_btn.clicked.connect(self._skip_discovered_plugin)
+        plugin_btn_layout.addWidget(self._skip_plugin_btn)
+
+        plugin_btn_layout.addStretch()
+        plugin_found_layout.addLayout(plugin_btn_layout)
+
+        layout.addWidget(self._plugin_found_group)
+
         # Progress bar (hidden by default)
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 0)  # Indeterminate
@@ -210,12 +239,15 @@ class SourceConfigPage(QWizardPage):
         # This is connected to the path/URL fields, not pattern
         self._source_validated = False
         self._available_caps.clear()
+        self._discovered_plugin = None
         # Hide CAP list if visible (for GitHub)
         self._cap_list.hide()
         self._cap_list_label.hide()
         self._select_all_btn.hide()
         self._deselect_all_btn.hide()
         self._fetch_selected_btn.hide()
+        # Hide plugin discovery notification
+        self._plugin_found_group.hide()
         self.completeChanged.emit()
 
     def _on_cap_selection_changed(self, item):
@@ -432,6 +464,26 @@ class SourceConfigPage(QWizardPage):
                 self._status_label.setStyleSheet("color: red;")
                 return
 
+            # Check for plugin definition in repo or release
+            self._discovered_plugin = None
+            self._plugin_found_group.hide()
+
+            # Try repo root first, then release assets
+            plugin_def = fetch_github_plugin_definition(owner, repo)
+            if not plugin_def:
+                plugin_def = fetch_github_release_plugin_definition(owner, repo, tag)
+
+            if plugin_def:
+                filename, plugin_data = plugin_def
+                self._discovered_plugin = plugin_def
+                plugin_name = plugin_data.get("name", plugin_data.get("applet", {}).get("name", "Unknown"))
+                self._plugin_found_label.setText(
+                    f"This repository provides a plugin definition ({filename}).\n"
+                    f"Plugin: {plugin_name}\n\n"
+                    "You can import it directly or continue configuring manually."
+                )
+                self._plugin_found_group.show()
+
             # Fetch ALL release assets matching pattern
             try:
                 assets = fetch_github_release_assets(owner, repo, pattern, tag)
@@ -610,6 +662,42 @@ class SourceConfigPage(QWizardPage):
     def get_cap_metadata(self):
         """Get the extracted CAP metadata for use by other pages."""
         return self._cap_metadata
+
+    def _import_discovered_plugin(self):
+        """Import the discovered plugin definition directly."""
+        if not self._discovered_plugin:
+            return
+
+        filename, plugin_data = self._discovered_plugin
+        wizard = self.wizard()
+        if not wizard:
+            return
+
+        # Store the plugin data for the wizard to use
+        wizard.set_plugin_data("_imported_plugin", plugin_data)
+        wizard.set_plugin_data("_imported_plugin_filename", filename)
+
+        # Show confirmation and close wizard with accept
+        from PyQt5.QtWidgets import QMessageBox
+        plugin_name = plugin_data.get("name", plugin_data.get("applet", {}).get("name", "Unknown"))
+
+        reply = QMessageBox.question(
+            self,
+            "Import Plugin",
+            f"Import plugin '{plugin_name}' from {filename}?\n\n"
+            "This will save the plugin and close the wizard.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            # Signal wizard to import and close
+            wizard.import_plugin_definition(plugin_data, filename)
+
+    def _skip_discovered_plugin(self):
+        """Skip the discovered plugin and continue manually."""
+        self._plugin_found_group.hide()
+        self._discovered_plugin = None
 
     def validatePage(self) -> bool:
         """Validate and save data."""

@@ -180,10 +180,38 @@ class MetadataPage(QWizardPage):
         if applet_name and not self._name_edit.text():
             self._name_edit.setText(applet_name)
         elif not self._name_edit.text():
-            # Fall back to plugin name
-            plugin_name = wizard.get_plugin_value("plugin.name", "")
-            if plugin_name:
-                self._name_edit.setText(plugin_name.replace("-", " ").title())
+            # Try to get name from CAP metadata or filename
+            name_found = False
+
+            # Check extracted metadata for package name
+            extracted = wizard.get_plugin_value("_extracted_metadata")
+            if extracted and extracted.package_name:
+                # Convert package name to display name (e.g., "org.example.MyApplet" -> "My Applet")
+                pkg_parts = extracted.package_name.split(".")
+                if pkg_parts:
+                    # Use last part, add spaces before capitals
+                    last_part = pkg_parts[-1]
+                    import re
+                    display_name = re.sub(r'(?<!^)(?=[A-Z])', ' ', last_part)
+                    self._name_edit.setText(display_name)
+                    name_found = True
+
+            # Fall back to first selected CAP filename
+            if not name_found and selected_caps:
+                first_cap = selected_caps[0]
+                filename = first_cap.get("filename", "")
+                if filename:
+                    # Remove .cap extension and convert to display name
+                    name = filename.replace(".cap", "").replace("-", " ").replace("_", " ")
+                    # Title case but preserve existing caps
+                    self._name_edit.setText(name.title())
+                    name_found = True
+
+            # Last resort: fall back to plugin name
+            if not name_found:
+                plugin_name = wizard.get_plugin_value("plugin.name", "")
+                if plugin_name:
+                    self._name_edit.setText(plugin_name.replace("-", " ").title())
 
         # Load AID - check for static aid first, then aid_construction.base
         aid = wizard.get_plugin_value("applet.metadata.aid", "")

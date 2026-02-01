@@ -466,3 +466,128 @@ def show_save_file_dialog(
         callback: Called with selected path or empty string
     """
     run_file_dialog_async("save", title, filetypes, initial_file, callback)
+
+
+# Well-known plugin definition filenames (checked in order)
+PLUGIN_DEFINITION_FILENAMES = [
+    "gp-plugin.yaml",
+    "gp-plugin.yml",
+    ".gp-plugin.yaml",
+    ".gp-plugin.yml",
+]
+
+
+def fetch_github_plugin_definition(owner: str, repo: str, branch: str = "") -> Optional[tuple[str, dict]]:
+    """
+    Check if a GitHub repository provides a GP GUI plugin definition.
+
+    Looks for well-known plugin definition files in the repo root:
+    - gp-plugin.yaml / gp-plugin.yml
+    - .gp-plugin.yaml / .gp-plugin.yml
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        branch: Branch to check (defaults to repo's default branch)
+
+    Returns:
+        Tuple of (filename, parsed_yaml_dict) if found, None otherwise
+    """
+    import json
+    import yaml
+
+    # First get the default branch if not specified
+    if not branch:
+        try:
+            api_url = f"https://api.github.com/repos/{owner}/{repo}"
+            req = urllib.request.Request(api_url)
+            req.add_header('Accept', 'application/vnd.github.v3+json')
+            req.add_header('User-Agent', 'GlobalPlatformGUI')
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                repo_data = json.loads(response.read().decode())
+                branch = repo_data.get("default_branch", "main")
+        except Exception:
+            branch = "main"  # Fallback
+
+    # Try each well-known filename
+    for filename in PLUGIN_DEFINITION_FILENAMES:
+        try:
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{filename}"
+            req = urllib.request.Request(raw_url)
+            req.add_header('User-Agent', 'GlobalPlatformGUI')
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read().decode('utf-8')
+
+            # Parse YAML
+            plugin_data = yaml.safe_load(content)
+
+            if isinstance(plugin_data, dict):
+                return (filename, plugin_data)
+
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue  # File not found, try next
+            # Other errors - stop trying
+            break
+        except Exception:
+            continue
+
+    return None
+
+
+def fetch_github_release_plugin_definition(owner: str, repo: str, tag: str = "") -> Optional[tuple[str, dict]]:
+    """
+    Check if a GitHub release contains a plugin definition file.
+
+    Looks for *.gp-plugin.yaml or gp-plugin.yaml in release assets.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        tag: Release tag (uses latest if empty)
+
+    Returns:
+        Tuple of (filename, parsed_yaml_dict) if found, None otherwise
+    """
+    import json
+    import yaml
+
+    if tag:
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+    else:
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+
+    try:
+        req = urllib.request.Request(api_url)
+        req.add_header('Accept', 'application/vnd.github.v3+json')
+        req.add_header('User-Agent', 'GlobalPlatformGUI')
+
+        with urllib.request.urlopen(req, timeout=10) as response:
+            release_data = json.loads(response.read().decode())
+
+        assets = release_data.get('assets', [])
+
+        # Look for plugin definition files
+        for asset in assets:
+            name = asset.get('name', '')
+            if name.endswith('.gp-plugin.yaml') or name.endswith('.gp-plugin.yml') or \
+               name == 'gp-plugin.yaml' or name == 'gp-plugin.yml':
+                download_url = asset.get('browser_download_url', '')
+                if download_url:
+                    # Download and parse
+                    req = urllib.request.Request(download_url)
+                    req.add_header('User-Agent', 'GlobalPlatformGUI')
+
+                    with urllib.request.urlopen(req, timeout=30) as response:
+                        content = response.read().decode('utf-8')
+
+                    plugin_data = yaml.safe_load(content)
+                    if isinstance(plugin_data, dict):
+                        return (name, plugin_data)
+
+    except Exception:
+        pass
+
+    return None

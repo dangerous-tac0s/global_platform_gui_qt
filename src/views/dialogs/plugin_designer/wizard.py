@@ -170,6 +170,88 @@ class PluginDesignerWizard(QWizard):
 
         return cleaned
 
+    def import_plugin_definition(self, plugin_data: dict, source_filename: str):
+        """
+        Import a discovered plugin definition directly.
+
+        This saves the plugin YAML and closes the wizard.
+        Used when a gp-plugin.yaml is discovered in a repository.
+        """
+        # Validate the plugin data has required fields
+        if not plugin_data.get("plugin") and not plugin_data.get("applet"):
+            QMessageBox.warning(
+                self,
+                "Invalid Plugin",
+                "The plugin definition is missing required fields.",
+            )
+            return
+
+        # Merge with defaults
+        if "schema_version" in plugin_data:
+            self._plugin_data["schema_version"] = plugin_data["schema_version"]
+
+        if "plugin" in plugin_data:
+            self._plugin_data["plugin"].update(plugin_data["plugin"])
+
+        if "applet" in plugin_data:
+            if "source" in plugin_data["applet"]:
+                self._plugin_data["applet"]["source"] = plugin_data["applet"]["source"]
+            if "metadata" in plugin_data["applet"]:
+                self._plugin_data["applet"]["metadata"] = plugin_data["applet"]["metadata"]
+
+        if "install_ui" in plugin_data:
+            self._plugin_data["install_ui"] = plugin_data["install_ui"]
+
+        if "parameters" in plugin_data:
+            self._plugin_data["parameters"] = plugin_data["parameters"]
+
+        if "management_ui" in plugin_data:
+            self._plugin_data["management_ui"] = plugin_data["management_ui"]
+
+        if "workflows" in plugin_data:
+            self._plugin_data["workflows"] = plugin_data["workflows"]
+
+        # Generate YAML
+        yaml_content = self.generate_yaml()
+
+        # Determine save path
+        plugins_dir = Path(__file__).parent.parent.parent.parent.parent / "plugins"
+        plugins_dir.mkdir(exist_ok=True)
+
+        plugin_name = self._plugin_data.get("plugin", {}).get("name", "imported-plugin")
+        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in plugin_name)
+        save_path = plugins_dir / f"{safe_name}.yaml"
+
+        # Check for overwrite
+        if save_path.exists():
+            reply = QMessageBox.question(
+                self,
+                "Overwrite?",
+                f"Plugin '{safe_name}.yaml' already exists.\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write(yaml_content)
+
+            self.plugin_created.emit(yaml_content, str(save_path))
+            QMessageBox.information(
+                self,
+                "Plugin Imported",
+                f"Plugin imported from {source_filename}\n\nSaved to:\n{save_path}",
+            )
+            super().accept()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to save plugin:\n{e}",
+            )
+
     def load_from_file(self, yaml_path: str):
         """
         Load existing plugin data from a YAML file for editing.
