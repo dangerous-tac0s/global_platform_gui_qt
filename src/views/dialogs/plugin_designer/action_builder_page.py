@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QWidget,
     QTabWidget,
+    QMessageBox,
 )
 
 
@@ -276,9 +277,47 @@ class ActionFieldDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _validate_and_accept(self):
+        """Validate field data before accepting."""
+        import re
+
+        field_id = self._id_edit.text().strip()
+
+        if not field_id:
+            QMessageBox.warning(
+                self,
+                "Field ID Required",
+                "Please enter a field ID.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', field_id):
+            QMessageBox.warning(
+                self,
+                "Invalid Field ID",
+                f"'{field_id}' is not a valid identifier.\n\n"
+                "Field IDs must start with a letter or underscore "
+                "and contain only letters, numbers, and underscores.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        label = self._label_edit.text().strip()
+        if not label:
+            QMessageBox.warning(
+                self,
+                "Label Required",
+                "Please enter a display label.",
+            )
+            self._label_edit.setFocus()
+            return
+
+        self.accept()
 
     def _load_data(self):
         """Load existing field data."""
@@ -479,9 +518,48 @@ class ActionDefinitionDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _validate_and_accept(self):
+        """Validate action data before accepting."""
+        import re
+
+        action_id = self._id_edit.text().strip()
+
+        if not action_id:
+            QMessageBox.warning(
+                self,
+                "Action ID Required",
+                "Please enter an action ID.\n\n"
+                "The action ID is used to identify this action in the plugin.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', action_id):
+            QMessageBox.warning(
+                self,
+                "Invalid Action ID",
+                f"'{action_id}' is not a valid identifier.\n\n"
+                "Action IDs must start with a letter or underscore "
+                "and contain only letters, numbers, and underscores.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        label = self._label_edit.text().strip()
+        if not label:
+            QMessageBox.warning(
+                self,
+                "Label Required",
+                "Please enter a display label for the action.",
+            )
+            self._label_edit.setFocus()
+            return
+
+        self.accept()
 
     def _load_data(self):
         """Load existing action data."""
@@ -753,6 +831,14 @@ class ActionBuilderPage(QWizardPage):
         fields = wizard.get_plugin_value("install_ui.form.fields", [])
         return fields if fields else []
 
+    def _get_existing_action_ids(self, exclude_index: int = -1) -> set:
+        """Get set of existing action IDs, optionally excluding one index."""
+        ids = set()
+        for i, action in enumerate(self._actions):
+            if i != exclude_index:
+                ids.add(action.get("id", ""))
+        return ids
+
     def _add_action(self):
         """Add a new action."""
         dialog = ActionDefinitionDialog(
@@ -761,7 +847,17 @@ class ActionBuilderPage(QWizardPage):
         )
         if dialog.exec_() == QDialog.Accepted:
             action_data = dialog.get_action_data()
-            if action_data.get("id"):
+            action_id = action_data.get("id")
+            if action_id:
+                # Check for duplicate ID
+                if action_id in self._get_existing_action_ids():
+                    QMessageBox.warning(
+                        self,
+                        "Duplicate Action ID",
+                        f"An action with ID '{action_id}' already exists.\n\n"
+                        "Please use a unique action ID.",
+                    )
+                    return
                 self._actions.append(action_data)
                 self._update_list()
 
@@ -786,7 +882,18 @@ class ActionBuilderPage(QWizardPage):
                 parent=self
             )
             if dialog.exec_() == QDialog.Accepted:
-                self._actions[index] = dialog.get_action_data()
+                action_data = dialog.get_action_data()
+                action_id = action_data.get("id")
+                # Check for duplicate ID (excluding current action)
+                if action_id and action_id in self._get_existing_action_ids(exclude_index=index):
+                    QMessageBox.warning(
+                        self,
+                        "Duplicate Action ID",
+                        f"An action with ID '{action_id}' already exists.\n\n"
+                        "Please use a unique action ID.",
+                    )
+                    return
+                self._actions[index] = action_data
                 self._update_list()
 
     def _remove_action(self):

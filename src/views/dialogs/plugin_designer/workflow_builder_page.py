@@ -217,9 +217,47 @@ class WorkflowStepDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _validate_and_accept(self):
+        """Validate step data before accepting."""
+        import re
+
+        step_id = self._id_edit.text().strip()
+
+        if not step_id:
+            QMessageBox.warning(
+                self,
+                "Step ID Required",
+                "Please enter a step ID.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', step_id):
+            QMessageBox.warning(
+                self,
+                "Invalid Step ID",
+                f"'{step_id}' is not a valid identifier.\n\n"
+                "Step IDs must start with a letter or underscore "
+                "and contain only letters, numbers, and underscores.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        name = self._name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(
+                self,
+                "Name Required",
+                "Please enter a display name for this step.",
+            )
+            self._name_edit.setFocus()
+            return
+
+        self.accept()
 
     def _on_type_changed(self, index: int):
         """Show appropriate configuration for selected type."""
@@ -515,9 +553,49 @@ class WorkflowDefinitionDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _validate_and_accept(self):
+        """Validate workflow data before accepting."""
+        import re
+
+        workflow_id = self._id_edit.text().strip()
+
+        if not workflow_id:
+            QMessageBox.warning(
+                self,
+                "Workflow ID Required",
+                "Please enter a workflow ID.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', workflow_id):
+            QMessageBox.warning(
+                self,
+                "Invalid Workflow ID",
+                f"'{workflow_id}' is not a valid identifier.\n\n"
+                "Workflow IDs must start with a letter or underscore "
+                "and contain only letters, numbers, and underscores.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        if not self._steps:
+            reply = QMessageBox.question(
+                self,
+                "No Steps",
+                "This workflow has no steps defined.\n\n"
+                "Save anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self.accept()
 
     def _load_data(self):
         """Load existing workflow data."""
@@ -789,6 +867,15 @@ class WorkflowBuilderPage(QWizardPage):
         if dialog.exec_() == QDialog.Accepted:
             workflow_id = dialog.get_workflow_id()
             if workflow_id:
+                # Check for duplicate ID
+                if workflow_id in self._workflows:
+                    QMessageBox.warning(
+                        self,
+                        "Duplicate Workflow ID",
+                        f"A workflow with ID '{workflow_id}' already exists.\n\n"
+                        "Please use a unique workflow ID.",
+                    )
+                    return
                 self._workflows[workflow_id] = dialog.get_workflow_data()
                 self._update_list()
 
@@ -818,8 +905,16 @@ class WorkflowBuilderPage(QWizardPage):
             new_id = dialog.get_workflow_id()
             new_data = dialog.get_workflow_data()
 
-            # Handle ID change
+            # Handle ID change - check for conflicts
             if new_id != workflow_id:
+                if new_id in self._workflows:
+                    QMessageBox.warning(
+                        self,
+                        "Duplicate Workflow ID",
+                        f"A workflow with ID '{new_id}' already exists.\n\n"
+                        "Please use a unique workflow ID.",
+                    )
+                    return
                 del self._workflows[workflow_id]
 
             self._workflows[new_id] = new_data

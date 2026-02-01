@@ -87,6 +87,8 @@ class PluginDesignerWizard(QWizard):
             "workflows": None,
         }
         self._original_path: Optional[str] = None
+        self._has_changes = False
+        self._saved = False
 
         self._setup_pages()
 
@@ -124,6 +126,9 @@ class PluginDesignerWizard(QWizard):
 
     def set_plugin_data(self, key: str, value: Any):
         """Set a value in plugin data using dot notation."""
+        # Skip internal keys (starting with _) for change tracking
+        if not key.startswith("_"):
+            self._has_changes = True
         keys = key.split(".")
         data = self._plugin_data
         for k in keys[:-1]:
@@ -355,6 +360,7 @@ class PluginDesignerWizard(QWizard):
                 "Success",
                 f"Plugin saved to:\n{save_path}",
             )
+            self._saved = True
             super().accept()
         except Exception as e:
             QMessageBox.critical(
@@ -362,6 +368,32 @@ class PluginDesignerWizard(QWizard):
                 "Error",
                 f"Failed to save plugin:\n{e}",
             )
+
+    def done(self, result):
+        """Clean up when wizard closes."""
+        # Check for unsaved changes if closing without saving
+        if result != QWizard.Accepted and self._has_changes and not self._saved:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved changes.\n\n"
+                "Are you sure you want to close without saving?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return  # Don't close
+
+        self._cleanup_preview_windows()
+        super().done(result)
+
+    def _cleanup_preview_windows(self):
+        """Close any open preview windows from wizard pages."""
+        # Clean up UIBuilderPage preview window
+        ui_page = self.page(self.PAGE_UI_BUILDER)
+        if ui_page and hasattr(ui_page, '_preview_window') and ui_page._preview_window:
+            ui_page._preview_window.close()
+            ui_page._preview_window = None
 
 
 class IntroPage(QWizardPage):

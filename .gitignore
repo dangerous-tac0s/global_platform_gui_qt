@@ -40,8 +40,8 @@ data.enc.json
 .DS_Store
 Thumbs.db
 
-# PyInstaller
-*.spec
+# PyInstaller build artifacts (spec files are tracked)
+*.manifest
 
 # Testing
 .pytest_cache/
@@ -52,3 +52,12 @@ htmlcov/
 *.tmp
 *.temp
 temp_manifest.MF
+
+# Backup files
+*.backup
+*.bak
+
+# Claude Code
+.claude/
+claude.md
+CLAUDE.md

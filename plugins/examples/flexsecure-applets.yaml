@@ -1,0 +1,30 @@
+schema_version: '1.0'
+plugin:
+  name: flexsecure-applets
+  description: Collection of JavaCard applets for the FlexSecure, as well as build
+    and testing scripts, and documentation.
+  version: 1.0.0
+  author: DangerousThings
+applet:
+  source:
+    type: github_release
+    owner: dangerousthings
+    repo: flexsecure-applets
+  metadata:
+    name: Javacard Memory
+    aid: A0000008466D656D6F727901
+  variants:
+  - filename: javacard-memory.cap
+    display_name: Javacard Memory
+  - filename: keycard.cap
+    display_name: Keycard
+  - filename: SatoChip.cap
+    display_name: Satochip
+  - filename: Satodime.cap
+    display_name: Satodime
+  - filename: SeedKeeper.cap
+    display_name: Seedkeeper
+  - filename: vivokey-otp.cap
+    display_name: Vivokey Otp
+  - filename: YkHMACApplet.cap
+    display_name: Ykhmacapplet

@@ -22,7 +22,102 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QMessageBox,
+    QDialog,
+    QDialogButtonBox,
+    QRadioButton,
+    QComboBox,
 )
+
+
+# Well-known applets with their AIDs for mutual exclusion selection
+KNOWN_APPLETS = [
+    ("OpenJavaCard NDEF (Full)", "D2760000850101", "openjavacard-ndef-full.cap"),
+    ("OpenJavaCard NDEF (Tiny)", "D2760000850101", "openjavacard-ndef-tiny.cap"),
+    ("SmartPGP", "D276000124010304000A000000000000", "SmartPGPApplet-default.cap"),
+    ("SatoChip", "5361746F4368697000", "SatoChip.cap"),
+    ("SeedKeeper", "536565644B656570657200", "SeedKeeper.cap"),
+    ("U2F Applet", "A0000006472F0002", "U2FApplet.cap"),
+    ("FIDO2", "A0000006472F000101", "FIDO2.cap"),
+    ("YubiKey HMAC", "A000000527200101", "YkHMACApplet.cap"),
+    ("VivoKey OTP", "A0000005272101014150455801", "vivokey-otp.cap"),
+    ("JavaCard Memory", "A0000008466D656D6F727901", "javacard-memory.cap"),
+    ("Keycard", "A0000008040001", "keycard.cap"),
+]
+
+
+class MutualExclusionDialog(QDialog):
+    """Dialog for adding a mutual exclusion entry."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Mutual Exclusion")
+        self.setMinimumWidth(450)
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Selection mode
+        layout.addWidget(QLabel("Exclude applet by:"))
+
+        self._known_radio = QRadioButton("Known Applet")
+        self._known_radio.setChecked(True)
+        self._known_radio.toggled.connect(self._on_mode_changed)
+        layout.addWidget(self._known_radio)
+
+        # Known applet dropdown
+        self._known_combo = QComboBox()
+        for name, aid, cap in KNOWN_APPLETS:
+            self._known_combo.addItem(f"{name} ({cap})", (name, aid, cap))
+        layout.addWidget(self._known_combo)
+
+        self._cap_radio = QRadioButton("CAP Filename Pattern")
+        self._cap_radio.toggled.connect(self._on_mode_changed)
+        layout.addWidget(self._cap_radio)
+
+        # CAP pattern input
+        self._cap_edit = QLineEdit()
+        self._cap_edit.setPlaceholderText("e.g., *.cap or specific-app.cap")
+        self._cap_edit.setEnabled(False)
+        layout.addWidget(self._cap_edit)
+
+        self._aid_radio = QRadioButton("Custom AID")
+        self._aid_radio.toggled.connect(self._on_mode_changed)
+        layout.addWidget(self._aid_radio)
+
+        # AID input
+        self._aid_edit = QLineEdit()
+        self._aid_edit.setPlaceholderText("e.g., D276000124010304")
+        self._aid_edit.setEnabled(False)
+        layout.addWidget(self._aid_edit)
+
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_mode_changed(self):
+        """Update UI based on selected mode."""
+        self._known_combo.setEnabled(self._known_radio.isChecked())
+        self._cap_edit.setEnabled(self._cap_radio.isChecked())
+        self._aid_edit.setEnabled(self._aid_radio.isChecked())
+
+    def get_result(self) -> str:
+        """Get the exclusion entry string."""
+        if self._known_radio.isChecked():
+            data = self._known_combo.currentData()
+            if data:
+                name, aid, cap = data
+                return cap  # Return CAP filename for exclusion
+        elif self._cap_radio.isChecked():
+            cap = self._cap_edit.text().strip()
+            return cap if cap else ""
+        elif self._aid_radio.isChecked():
+            aid = self._aid_edit.text().strip().upper().replace(" ", "")
+            return aid if aid else ""
+        return ""
 
 
 class MetadataPage(QWizardPage):
@@ -140,16 +235,11 @@ class MetadataPage(QWizardPage):
 
     def _add_exclusion(self):
         """Add a mutual exclusion."""
-        from PyQt5.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(
-            self,
-            "Add Exclusion",
-            "Enter CAP filename:",
-            QLineEdit.Normal,
-            "*.cap",
-        )
-        if ok and text:
-            self._exclusion_list.addItem(text.strip())
+        dialog = MutualExclusionDialog(self)
+        if dialog.exec_() == 1:  # QDialog.Accepted
+            result = dialog.get_result()
+            if result:
+                self._exclusion_list.addItem(result)
 
     def _remove_exclusion(self):
         """Remove selected exclusion."""

@@ -132,9 +132,53 @@ class FieldDefinitionDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _validate_and_accept(self):
+        """Validate field data before accepting."""
+        import re
+
+        field_id = self._id_edit.text().strip()
+
+        # Check for empty ID
+        if not field_id:
+            QMessageBox.warning(
+                self,
+                "Field ID Required",
+                "Please enter a field ID.\n\n"
+                "The field ID is used to reference this field in actions and workflows.",
+            )
+            self._id_edit.setFocus()
+            return
+
+        # Check for valid identifier format
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', field_id):
+            QMessageBox.warning(
+                self,
+                "Invalid Field ID",
+                f"'{field_id}' is not a valid identifier.\n\n"
+                "Field IDs must:\n"
+                "• Start with a letter or underscore\n"
+                "• Contain only letters, numbers, and underscores\n"
+                "• Not contain spaces or special characters",
+            )
+            self._id_edit.setFocus()
+            return
+
+        # Check for label
+        label = self._label_edit.text().strip()
+        if not label:
+            QMessageBox.warning(
+                self,
+                "Label Required",
+                "Please enter a display label for the field.",
+            )
+            self._label_edit.setFocus()
+            return
+
+        self.accept()
 
     def _on_type_changed(self, field_type: str):
         """Update UI based on field type."""
