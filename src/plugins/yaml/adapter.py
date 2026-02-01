@@ -1,8 +1,8 @@
 """
 YAML Plugin Adapter
 
-Adapts YAML plugin definitions to the BaseAppletPlugin interface,
-allowing YAML plugins to be used alongside Python plugins.
+Provides a standard interface for YAML-defined plugins, handling
+CAP file discovery, installation dialogs, and management UI.
 """
 
 import os
@@ -13,7 +13,6 @@ from urllib.parse import urlparse
 
 from PyQt5.QtWidgets import QDialog
 
-from base_plugin import BaseAppletPlugin
 from .logging import logger
 from .schema import (
     AIDConstruction,
@@ -25,12 +24,15 @@ from .ui.dialog_builder import DialogBuilder, PluginDialog
 from .encoding.encoder import AIDBuilder, ParameterEncoder
 
 
-class YamlPluginAdapter(BaseAppletPlugin):
+class YamlPluginAdapter:
     """
-    Adapts a YAML plugin definition to the BaseAppletPlugin interface.
+    Adapter for YAML-defined plugins.
 
-    This allows YAML-defined plugins to be loaded and used by the existing
-    plugin system without modification.
+    Provides a standard interface for plugin operations:
+    - CAP file discovery and downloading
+    - Installation dialog creation
+    - Parameter encoding
+    - Management UI
     """
 
     def __init__(self, schema: PluginSchema, yaml_path: Optional[str] = None):
@@ -49,7 +51,7 @@ class YamlPluginAdapter(BaseAppletPlugin):
         self._param_encoder = ParameterEncoder(schema.parameters)
         self._fetched_cap_names: list[str] = []  # Cache of available cap names
 
-        # For compatibility with BaseAppletPlugin
+        # Plugin state
         self.release = None
         self.storage = {}
 
@@ -416,6 +418,15 @@ class YamlPluginAdapter(BaseAppletPlugin):
         self._selected_cap = cap_name
         # YAML plugins don't use the override_map pattern
         self._override_instance = None
+
+    def load_storage(self):
+        """
+        Load storage requirements.
+
+        For YAML plugins, storage is already initialized from the schema
+        in __init__, so this is a no-op for compatibility.
+        """
+        pass
 
     def set_release(self, release: str):
         """Set the release version."""

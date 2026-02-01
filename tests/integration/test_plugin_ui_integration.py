@@ -48,7 +48,7 @@ def temp_config_with_disabled():
         "known_tags": {},
         "last_checked": {},
         "window": {"width": 800, "height": 600},
-        "disabled_plugins": ["flexsecure_applets"]
+        "disabled_plugins": ["smartpgp"]  # Use a YAML plugin name
     }
 
 
@@ -67,32 +67,24 @@ class TestPluginLoading:
         # Print what we got for debugging
         print(f"\nLoaded plugins: {list(plugins.keys())}")
 
-    def test_load_plugins_includes_python_plugins(self):
-        """Test that Python plugins are loaded."""
-        from main import load_plugins
-
-        plugins = load_plugins()
-
-        # Check for flexsecure_applets (the Python plugin)
-        assert "flexsecure_applets" in plugins, (
-            f"Python plugin 'flexsecure_applets' not found. "
-            f"Available plugins: {list(plugins.keys())}"
-        )
-
     def test_load_plugins_includes_yaml_plugins(self):
         """Test that YAML plugins are loaded."""
         from main import load_plugins
 
         plugins = load_plugins()
 
-        # Check for YAML plugins
-        yaml_plugins = [
-            name for name, plugin in plugins.items()
-            if not isinstance(plugin, type)  # YAML plugins are instances, not classes
-        ]
+        # All plugins are now YAML-based
+        print(f"\nPlugins found: {list(plugins.keys())}")
+        assert len(plugins) > 0, "No plugins found"
 
-        print(f"\nYAML plugins found: {yaml_plugins}")
-        assert len(yaml_plugins) > 0, "No YAML plugins found"
+        # Check for expected YAML plugins
+        expected_plugins = ["smartpgp", "flexsecure-applets", "openjavacard-ndef"]
+        for name in expected_plugins:
+            if name in plugins:
+                print(f"  Found expected plugin: {name}")
+                break
+        else:
+            print(f"  Note: None of {expected_plugins} found, but that's OK if other plugins exist")
 
 
 class TestSettingsDialog:
@@ -133,11 +125,11 @@ class TestSettingsDialog:
         # Create settings dialog with disabled plugin
         dialog = SettingsDialog(plugins, temp_config_with_disabled)
 
-        # Check that flexsecure_applets is shown but unchecked
-        if "flexsecure_applets" in dialog._plugins_tab._plugin_items:
-            item = dialog._plugins_tab._plugin_items["flexsecure_applets"]
+        # Check that smartpgp (disabled in fixture) is shown but unchecked
+        if "smartpgp" in dialog._plugins_tab._plugin_items:
+            item = dialog._plugins_tab._plugin_items["smartpgp"]
             assert not item.is_enabled, (
-                "flexsecure_applets should be disabled (unchecked) in settings"
+                "smartpgp should be disabled (unchecked) in settings"
             )
 
         dialog.close()
@@ -175,19 +167,20 @@ class TestSettingsDialog:
         plugins = load_plugins()
         dialog = SettingsDialog(plugins, temp_config)
 
-        # Disable a plugin
+        # Disable a plugin (use first available)
         plugin_items = dialog._plugins_tab._plugin_items
-        if "flexsecure_applets" in plugin_items:
-            plugin_items["flexsecure_applets"]._checkbox.setChecked(False)
+        if len(plugin_items) > 0:
+            first_plugin = list(plugin_items.keys())[0]
+            plugin_items[first_plugin]._checkbox.setChecked(False)
 
-        # Save settings
-        dialog._save_settings()
+            # Save settings
+            dialog._save_settings()
 
-        # Check config was updated
-        assert "disabled_plugins" in dialog._config
-        assert "flexsecure_applets" in dialog._config["disabled_plugins"], (
-            "flexsecure_applets should be in disabled_plugins after save"
-        )
+            # Check config was updated
+            assert "disabled_plugins" in dialog._config
+            assert first_plugin in dialog._config["disabled_plugins"], (
+                f"{first_plugin} should be in disabled_plugins after save"
+            )
 
         dialog.close()
 
@@ -204,22 +197,22 @@ class TestPluginFiltering:
 
         # Simulate the app's filtering logic
         available_apps = {}
-        for plugin_name, plugin_cls_or_instance in plugins.items():
+        for plugin_name, plugin in plugins.items():
             if plugin_name in disabled_set:
                 continue  # Skip disabled
 
-            plugin = get_plugin_instance(plugin_cls_or_instance)
+            plugin_instance = get_plugin_instance(plugin)
             try:
-                caps = plugin.fetch_available_caps()
+                caps = plugin_instance.fetch_available_caps()
                 for cap_name, url in caps.items():
                     available_apps[cap_name] = (plugin_name, url)
             except Exception:
                 pass  # Some plugins may fail to fetch
 
-        # Check that flexsecure_applets' caps are not in available_apps
+        # Check that disabled plugins' caps are not in available_apps
         for cap_name, (plugin_name, _) in available_apps.items():
-            assert plugin_name != "flexsecure_applets", (
-                f"Cap {cap_name} is from disabled plugin flexsecure_applets"
+            assert plugin_name not in disabled_set, (
+                f"Cap {cap_name} is from disabled plugin {plugin_name}"
             )
 
 

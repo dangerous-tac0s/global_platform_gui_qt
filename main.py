@@ -5,7 +5,6 @@ import pprint
 import sys
 import os
 import tempfile
-import importlib
 import textwrap
 import time
 
@@ -272,107 +271,49 @@ os.makedirs(CAP_DOWNLOAD_DIR, exist_ok=True)
 #
 unsupported_apps = ["FIDO2.cap", "openjavacard-ndef-tiny.cap", "keycard.cap"]
 
-#
-# We'll define our base plugin interface
-#
-try:
-    from base_plugin import BaseAppletPlugin
-except ImportError:
-    # Fallback if we haven't provided the real base_plugin yet
-    class BaseAppletPlugin:
-        pass
-
-
-def get_plugin_instance(plugin_cls_or_instance):
+def get_plugin_instance(plugin):
     """
-    Get a plugin instance from either a class or existing instance.
+    Get a plugin instance.
 
-    For Python plugins, we store classes and need to instantiate.
-    For YAML plugins, we store adapter instances directly.
+    All plugins are now YAML-based and stored as adapter instances.
+    This function is kept for API compatibility.
     """
-    if isinstance(plugin_cls_or_instance, type):
-        return plugin_cls_or_instance()
-    return plugin_cls_or_instance
+    return plugin
 
 
 def load_plugins():
     """
-    Scan the /repos and /plugins folders for plugins.
+    Discover and load YAML plugins.
 
-    Loads both:
-    - Python plugins (subfolders with __init__.py defining BaseAppletPlugin subclass)
-    - YAML plugins (.yaml/.yml files with valid plugin schema)
+    Scans the /plugins folder for .yaml/.yml files with valid plugin schemas.
 
-    Returns a dict plugin_map: { plugin_name: plugin_class_or_adapter }.
-    E.g. { "flexsecure_applets": <class FlexsecureAppletsPlugin>, "smartpgp": <YamlPluginAdapter>, ... }
+    Returns a dict plugin_map: { plugin_name: YamlPluginAdapter }.
+    E.g. { "smartpgp": <YamlPluginAdapter>, "flexsecure-applets": <YamlPluginAdapter>, ... }
 
     Note: All plugins are loaded. Use get_enabled_plugins() to filter by disabled list.
     """
     plugin_map = {}
-    # Use resource_path for PyInstaller compatibility
-    repos_dir = resource_path("repos")
-    plugins_dir = resource_path("plugins")
-    dir_to_name_map = {repos_dir: "repos", plugins_dir: "plugins"}
-    print(plugins_dir)
-    dirs = [repos_dir, plugins_dir]
 
-    # Load Python plugins
-    for d in dirs:
-        if not os.path.isdir(d):
-            print(f"No /{dir_to_name_map[d]} folder found, skipping plugin load.")
-            continue
-
-        for repo_name in os.listdir(d):
-            repo_path = os.path.join(d, repo_name)
-            if (
-                os.path.isdir(repo_path)
-                and not repo_name.startswith("__")
-                and not repo_name.startswith(".")
-            ):
-                # We check if there's an __init__.py in that folder
-                init_file = os.path.join(repo_path, "__init__.py")
-                if os.path.isfile(init_file):
-                    # Attempt to import the repo as a package
-                    mod_path = f"{dir_to_name_map[d]}.{repo_name}"  # e.g. repos.flexsecure_applets
-                    try:
-                        mod = importlib.import_module(mod_path)
-                        # find classes implementing BaseAppletPlugin
-                        for attr_name in dir(mod):
-                            attr = getattr(mod, attr_name)
-                            if (
-                                isinstance(attr, type)
-                                and issubclass(attr, BaseAppletPlugin)
-                                and attr is not BaseAppletPlugin
-                            ):
-                                instance = attr()
-                                plugin_map[instance.name] = attr
-                    except Exception as e:
-                        print(f"Error importing {mod_path}: {e}")
-
-    # Load YAML plugins
     try:
         from src.plugins.yaml.loader import YamlPluginLoader
+
         # Use resource_path for PyInstaller compatibility
         base_dir = resource_path(".")
         loader = YamlPluginLoader(base_dir)
         yaml_plugins = loader.discover()
 
         for plugin_name, adapter in yaml_plugins.items():
-            if plugin_name in plugin_map:
-                print(f"Warning: YAML plugin '{plugin_name}' conflicts with existing plugin, skipping")
-            else:
-                # Store the adapter instance (it implements BaseAppletPlugin interface)
-                plugin_map[plugin_name] = adapter
-                print(f"Loaded YAML plugin: {plugin_name}")
+            plugin_map[plugin_name] = adapter
+            print(f"Loaded plugin: {plugin_name}")
 
         # Report any loading errors
         for path, error in loader.get_errors():
-            print(f"Error loading YAML plugin {path}: {error}")
+            print(f"Error loading plugin {path}: {error}")
 
     except ImportError as e:
-        print(f"YAML plugin system not available: {e}")
+        print(f"Plugin system not available: {e}")
     except Exception as e:
-        print(f"Error loading YAML plugins: {e}")
+        print(f"Error loading plugins: {e}")
 
     return plugin_map
 
