@@ -1,0 +1,183 @@
+schema_version: "1.0"
+
+plugin:
+  name: "smartpgp"
+  description: "SmartPGP OpenPGP card applet with dynamic AID construction"
+  version: "1.0.0"
+  author: "Community"
+
+applet:
+  source:
+    type: "github_release"
+    owner: "DangerousThings"
+    repo: "flexsecure-applets"
+    asset_pattern: "SmartPGPApplet*.cap"
+  metadata:
+    name: "SmartPGP"
+    aid_construction:
+      base: "D276000124010304"
+      segments:
+        - name: "manufacturer"
+          length: 2
+          source: "field:manufacturer_id"
+        - name: "serial"
+          length: 4
+          source: "field:serial_number"
+        - name: "reserved"
+          length: 2
+          default: "0000"
+    storage:
+      persistent: 8192
+      transient: 1024
+    description: |
+      SmartPGP is a JavaCard implementation of the OpenPGP card specifications.
+      Supports OpenPGP 3.4 with RSA and ECC keys.
+
+install_ui:
+  form:
+    fields:
+      - id: "manufacturer_id"
+        type: "text"
+        label: "Manufacturer ID"
+        placeholder: "000A"
+        default: "000A"
+        required: true
+        validation:
+          pattern: "^[0-9A-Fa-f]{4}$"
+          message: "Must be exactly 4 hex characters"
+        transform: "uppercase"
+        description: "2-byte manufacturer identifier in hex"
+
+      - id: "serial_number"
+        type: "text"
+        label: "Serial Number"
+        placeholder: "00000001"
+        default: "00000001"
+        required: true
+        validation:
+          pattern: "^[0-9A-Fa-f]{8}$"
+          message: "Must be exactly 8 hex characters"
+        transform: "uppercase"
+        description: "4-byte serial number in hex"
+
+management_ui:
+  state_readers:
+    - id: "pin_retries"
+      label: "User PIN Retries"
+      apdu: "00CA00C4"
+      parse:
+        type: "byte"
+        offset: 4
+        display: "{value}/3 attempts remaining"
+
+    - id: "admin_pin_retries"
+      label: "Admin PIN Retries"
+      apdu: "00CA00C4"
+      parse:
+        type: "byte"
+        offset: 6
+        display: "{value}/3 attempts remaining"
+
+    - id: "signature_key"
+      label: "Signature Key"
+      apdu: "00CA006E"
+      parse:
+        type: "tlv"
+        tag: "C1"
+        display_map:
+          "": "Not generated"
+          "01": "RSA 2048"
+          "12": "ECC P-256"
+          "16": "ECC P-384"
+
+  actions:
+    - id: "change_user_pin"
+      label: "Change User PIN"
+      description: "Change the user PIN (PIN1)"
+      dialog:
+        fields:
+          - id: "old_pin"
+            type: "password"
+            label: "Current PIN"
+            required: true
+            validation:
+              min_length: 6
+              max_length: 127
+              message: "PIN must be 6-127 characters"
+          - id: "new_pin"
+            type: "password"
+            label: "New PIN"
+            required: true
+            validation:
+              min_length: 6
+              max_length: 127
+          - id: "confirm_pin"
+            type: "password"
+            label: "Confirm New PIN"
+            required: true
+            validation:
+              equals_field: "new_pin"
+              message: "PINs must match"
+      apdu_sequence:
+        - command: "CHANGE_REFERENCE_DATA"
+          apdu: "00240081{old_pin_length:02X}{old_pin_hex}{new_pin_length:02X}{new_pin_hex}"
+          description: "Changing user PIN..."
+
+    - id: "generate_signature_key"
+      label: "Generate Signature Key"
+      description: "Generate a new signature key pair"
+      workflow: "generate_sig_key"
+
+workflows:
+  generate_sig_key:
+    steps:
+      - id: "confirm"
+        name: "Confirm Key Generation"
+        type: "dialog"
+        fields:
+          - id: "key_type"
+            type: "dropdown"
+            label: "Key Type"
+            options:
+              - label: "RSA 2048"
+                value: "01"
+              - label: "ECC P-256"
+                value: "12"
+              - label: "ECC P-384"
+                value: "16"
+            default: "12"
+          - id: "admin_pin"
+            type: "password"
+            label: "Admin PIN"
+            required: true
+
+      - id: "verify_admin"
+        name: "Verify Admin PIN"
+        type: "apdu"
+        depends_on: ["confirm"]
+        apdu: "00200083{admin_pin_length:02X}{admin_pin_hex}"
+        description: "Verifying admin PIN..."
+
+      - id: "set_algorithm"
+        name: "Set Key Algorithm"
+        type: "apdu"
+        depends_on: ["verify_admin"]
+        apdu: "00DA00C1{key_type}"
+        description: "Setting key algorithm..."
+
+      - id: "generate"
+        name: "Generate Key"
+        type: "apdu"
+        depends_on: ["set_algorithm"]
+        apdu: "0047800002B600"
+        description: "Generating signature key pair..."
+
+hooks:
+  pre_install:
+    type: "script"
+    script: |
+      # Validate that required fields are set
+      if not field_values.get("manufacturer_id"):
+          raise ValidationError("Manufacturer ID is required")
+      if not field_values.get("serial_number"):
+          raise ValidationError("Serial Number is required")
