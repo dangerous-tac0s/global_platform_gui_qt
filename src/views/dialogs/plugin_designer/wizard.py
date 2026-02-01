@@ -1,0 +1,497 @@
+"""
+Plugin Designer Wizard
+
+Main wizard dialog for creating YAML plugin definitions.
+"""
+
+from typing import Any, Optional
+from pathlib import Path
+
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import (
+    QWizard,
+    QWizardPage,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QTextEdit,
+    QPushButton,
+    QFileDialog,
+    QMessageBox,
+    QSplitter,
+)
+
+import yaml
+
+
+def _literal_str_representer(dumper, data):
+    """Represent multiline strings with literal block style (|)."""
+    if '\n' in data:
+        # Use literal block style for multiline
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+
+# Register the custom representer
+yaml.add_representer(str, _literal_str_representer)
+
+
+class PluginDesignerWizard(QWizard):
+    """
+    Multi-page wizard for creating YAML plugins.
+
+    Pages:
+    1. Source Config - CAP file source (local, HTTP, GitHub) - FIRST to enable auto-population
+    2. Basic Info - Plugin name, description, author (can be pre-filled from GitHub)
+    3. Metadata - AID, storage requirements, mutual exclusions
+    4. UI Builder - Form fields for installation parameters
+    5. Action Builder - Management actions for installed applets
+    6. Workflow Builder - Multi-step workflows for complex operations
+    7. Preview - Final YAML preview with export option
+    """
+
+    plugin_created = pyqtSignal(str, str)  # yaml_content, save_path
+
+    # Page IDs - Source first to enable auto-population
+    PAGE_SOURCE = 0
+    PAGE_INTRO = 1
+    PAGE_METADATA = 2
+    PAGE_UI_BUILDER = 3
+    PAGE_ACTION_BUILDER = 4
+    PAGE_WORKFLOW_BUILDER = 5
+    PAGE_PREVIEW = 6
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Plugin")
+        self.setMinimumSize(800, 600)
+        self.setWizardStyle(QWizard.ModernStyle)
+
+        # Store plugin data
+        self._plugin_data = {
+            "schema_version": "1.0",
+            "plugin": {
+                "name": "",
+                "description": "",
+                "version": "1.0.0",
+                "author": "",
+            },
+            "applet": {
+                "source": {},
+                "metadata": {},
+            },
+            "install_ui": None,
+            "parameters": None,
+            "management_ui": None,
+            "workflows": None,
+        }
+        self._original_path: Optional[str] = None
+
+        self._setup_pages()
+
+    def _setup_pages(self):
+        """Set up wizard pages."""
+        # Page 1: Source Config (first to enable auto-population)
+        from .source_page import SourceConfigPage
+        self.setPage(self.PAGE_SOURCE, SourceConfigPage(self))
+
+        # Page 2: Basic Info (can be pre-filled from source)
+        self.setPage(self.PAGE_INTRO, IntroPage(self))
+
+        # Page 3: Metadata
+        from .metadata_page import MetadataPage
+        self.setPage(self.PAGE_METADATA, MetadataPage(self))
+
+        # Page 4: UI Builder
+        from .ui_builder_page import UIBuilderPage
+        self.setPage(self.PAGE_UI_BUILDER, UIBuilderPage(self))
+
+        # Page 5: Action Builder
+        from .action_builder_page import ActionBuilderPage
+        self.setPage(self.PAGE_ACTION_BUILDER, ActionBuilderPage(self))
+
+        # Page 6: Workflow Builder
+        from .workflow_builder_page import WorkflowBuilderPage
+        self.setPage(self.PAGE_WORKFLOW_BUILDER, WorkflowBuilderPage(self))
+
+        # Page 7: Preview
+        self.setPage(self.PAGE_PREVIEW, PreviewPage(self))
+
+    def get_plugin_data(self) -> dict:
+        """Get the current plugin data."""
+        return self._plugin_data
+
+    def set_plugin_data(self, key: str, value: Any):
+        """Set a value in plugin data using dot notation."""
+        keys = key.split(".")
+        data = self._plugin_data
+        for k in keys[:-1]:
+            if k not in data or data[k] is None or not isinstance(data[k], dict):
+                data[k] = {}
+            data = data[k]
+        data[keys[-1]] = value
+
+    def get_plugin_value(self, key: str, default: Any = None) -> Any:
+        """Get a value from plugin data using dot notation."""
+        keys = key.split(".")
+        data = self._plugin_data
+        for k in keys:
+            if isinstance(data, dict) and k in data:
+                data = data[k]
+            else:
+                return default
+        return data
+
+    def generate_yaml(self) -> str:
+        """Generate YAML from the current plugin data."""
+        # Clean up the data
+        data = self._clean_plugin_data(self._plugin_data.copy())
+        return yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    def _clean_plugin_data(self, data: dict) -> dict:
+        """Remove empty/None values from plugin data."""
+        if not isinstance(data, dict):
+            return data
+
+        cleaned = {}
+        for key, value in data.items():
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                cleaned_value = self._clean_plugin_data(value)
+                if cleaned_value:  # Only add non-empty dicts
+                    cleaned[key] = cleaned_value
+            elif isinstance(value, list):
+                if value:  # Only add non-empty lists
+                    cleaned[key] = value
+            elif value != "":  # Only add non-empty strings
+                cleaned[key] = value
+
+        return cleaned
+
+    def load_from_file(self, yaml_path: str):
+        """
+        Load existing plugin data from a YAML file for editing.
+
+        Args:
+            yaml_path: Path to the YAML plugin file
+
+        Raises:
+            FileNotFoundError: If the file does not exist
+            ValueError: If the file is empty or invalid YAML
+        """
+        path = Path(yaml_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Plugin file not found: {yaml_path}")
+
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        if not data:
+            raise ValueError("Empty or invalid YAML file")
+
+        # Store the original path for save operations
+        self._original_path = yaml_path
+
+        # Merge loaded data with defaults
+        if "schema_version" in data:
+            self._plugin_data["schema_version"] = data["schema_version"]
+
+        if "plugin" in data:
+            self._plugin_data["plugin"].update(data["plugin"])
+
+        if "applet" in data:
+            if "source" in data["applet"]:
+                self._plugin_data["applet"]["source"] = data["applet"]["source"]
+            if "metadata" in data["applet"]:
+                self._plugin_data["applet"]["metadata"] = data["applet"]["metadata"]
+
+        if "install_ui" in data:
+            self._plugin_data["install_ui"] = data["install_ui"]
+
+        if "parameters" in data:
+            self._plugin_data["parameters"] = data["parameters"]
+
+        if "management_ui" in data:
+            self._plugin_data["management_ui"] = data["management_ui"]
+
+        if "workflows" in data:
+            self._plugin_data["workflows"] = data["workflows"]
+
+    def accept(self):
+        """Handle wizard acceptance - auto-save to plugins directory."""
+        yaml_content = self.generate_yaml()
+
+        # Determine save path
+        if self._original_path:
+            # Editing existing plugin
+            old_path = Path(self._original_path)
+            plugins_dir = old_path.parent
+
+            plugin_name = self._plugin_data.get("plugin", {}).get("name", "untitled")
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in plugin_name)
+            save_path = plugins_dir / f"{safe_name}.yaml"
+
+            # If name changed, we'll save to new path and delete old
+            old_file_will_be_replaced = (save_path == old_path)
+        else:
+            # New plugin
+            plugins_dir = Path(__file__).parent.parent.parent.parent.parent / "plugins"
+            plugins_dir.mkdir(exist_ok=True)
+
+            plugin_name = self._plugin_data.get("plugin", {}).get("name", "untitled")
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in plugin_name)
+            save_path = plugins_dir / f"{safe_name}.yaml"
+            old_file_will_be_replaced = False
+
+        # Check for overwrite (only if not the same file being edited)
+        if save_path.exists() and not (self._original_path and save_path == Path(self._original_path)):
+            reply = QMessageBox.question(
+                self,
+                "Overwrite?",
+                f"Plugin '{safe_name}.yaml' already exists.\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write(yaml_content)
+
+            # Delete old file if name changed during edit
+            if self._original_path and not old_file_will_be_replaced:
+                old_path = Path(self._original_path)
+                if old_path.exists() and old_path != save_path:
+                    old_path.unlink()
+
+            self.plugin_created.emit(yaml_content, str(save_path))
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Plugin saved to:\n{save_path}",
+            )
+            super().accept()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to save plugin:\n{e}",
+            )
+
+
+class IntroPage(QWizardPage):
+    """Plugin information page - can be pre-filled from source."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Plugin Information")
+        self.setSubTitle("Enter basic information about your plugin.")
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Plugin name
+        layout.addWidget(QLabel("Plugin Name:"))
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("e.g., my-applet")
+        self.registerField("plugin_name*", self._name_edit)
+        layout.addWidget(self._name_edit)
+
+        # Description
+        layout.addWidget(QLabel("Description:"))
+        self._desc_edit = QTextEdit()
+        self._desc_edit.setMaximumHeight(80)
+        self._desc_edit.setPlaceholderText("Brief description of what this plugin does")
+        layout.addWidget(self._desc_edit)
+
+        # Version
+        layout.addWidget(QLabel("Version:"))
+        self._version_edit = QLineEdit("1.0.0")
+        self.registerField("plugin_version", self._version_edit)
+        layout.addWidget(self._version_edit)
+
+        # Author
+        layout.addWidget(QLabel("Author:"))
+        self._author_edit = QLineEdit()
+        self._author_edit.setPlaceholderText("Your name or organization")
+        self.registerField("plugin_author", self._author_edit)
+        layout.addWidget(self._author_edit)
+
+        layout.addStretch()
+
+    def initializePage(self):
+        """Pre-fill from source data if available."""
+        wizard = self.wizard()
+        if not wizard:
+            return
+
+        # Try to get GitHub repo info
+        repo_info = wizard.get_plugin_value("_github_repo_info")
+        if repo_info:
+            # Pre-fill name from repo name (if not already set)
+            if not self._name_edit.text() and repo_info.get("name"):
+                self._name_edit.setText(repo_info["name"])
+
+            # Pre-fill description from repo description
+            if not self._desc_edit.toPlainText() and repo_info.get("description"):
+                self._desc_edit.setPlainText(repo_info["description"])
+
+            # Pre-fill author from repo owner
+            if not self._author_edit.text() and repo_info.get("owner"):
+                self._author_edit.setText(repo_info["owner"])
+
+
+    def validatePage(self) -> bool:
+        """Validate and save data."""
+        wizard = self.wizard()
+        if wizard:
+            wizard.set_plugin_data("plugin.name", self._name_edit.text().strip())
+            wizard.set_plugin_data("plugin.description", self._desc_edit.toPlainText().strip())
+            wizard.set_plugin_data("plugin.version", self._version_edit.text().strip())
+            wizard.set_plugin_data("plugin.author", self._author_edit.text().strip())
+        return True
+
+
+class YamlPreviewDialog:
+    """Separate window for YAML preview."""
+
+    def __init__(self, yaml_content: str, parent=None):
+        from PyQt5.QtWidgets import QDialog
+
+        # Create the preview widget
+        from .yaml_preview import YamlPreviewPane
+
+        self._dialog = QDialog(parent)
+        self._dialog.setWindowTitle("Plugin YAML Preview")
+        self._dialog.setMinimumSize(700, 500)
+
+        layout = QVBoxLayout(self._dialog)
+
+        self._preview = YamlPreviewPane()
+        self._preview.set_yaml(yaml_content)
+        layout.addWidget(self._preview)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn.clicked.connect(self._copy_to_clipboard)
+        btn_layout.addWidget(copy_btn)
+
+        btn_layout.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self._dialog.accept)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+        self._yaml_content = yaml_content
+
+    def _copy_to_clipboard(self):
+        """Copy YAML to clipboard."""
+        from PyQt5.QtWidgets import QApplication
+        QApplication.clipboard().setText(self._yaml_content)
+        QMessageBox.information(
+            self._dialog,
+            "Copied",
+            "YAML copied to clipboard.",
+        )
+
+    def exec_(self):
+        return self._dialog.exec_()
+
+
+class PreviewPage(QWizardPage):
+    """Final page: Shows summary and opens preview window."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Review & Export")
+        self.setSubTitle("Your plugin is ready. Review the generated YAML and save.")
+        self.setCommitPage(True)
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Summary info
+        self._summary_label = QLabel()
+        self._summary_label.setWordWrap(True)
+        self._summary_label.setStyleSheet("background-color: #f5f5f5; padding: 12px; border-radius: 4px;")
+        layout.addWidget(self._summary_label)
+
+        layout.addSpacing(20)
+
+        # Preview button
+        preview_btn = QPushButton("Show YAML Preview...")
+        preview_btn.clicked.connect(self._show_preview_window)
+        layout.addWidget(preview_btn)
+
+        # Copy button
+        copy_btn = QPushButton("Copy YAML to Clipboard")
+        copy_btn.clicked.connect(self._copy_to_clipboard)
+        layout.addWidget(copy_btn)
+
+        layout.addStretch()
+
+        # Instructions
+        instructions = QLabel(
+            "Click 'Finish' to save the plugin YAML file.\n"
+            "You can also copy the YAML to clipboard and paste it elsewhere."
+        )
+        instructions.setStyleSheet("color: gray;")
+        layout.addWidget(instructions)
+
+    def initializePage(self):
+        """Update summary when page is shown."""
+        wizard = self.wizard()
+        if not wizard:
+            return
+
+        # Build summary
+        plugin_name = wizard.get_plugin_value("plugin.name", "Unknown")
+        plugin_version = wizard.get_plugin_value("plugin.version", "1.0.0")
+        source_type = wizard.get_plugin_value("applet.source.type", "unknown")
+        selected_caps = wizard.get_plugin_value("_selected_caps", [])
+
+        summary_lines = [
+            f"<b>Plugin:</b> {plugin_name} v{plugin_version}",
+            f"<b>Source:</b> {source_type}",
+        ]
+
+        if selected_caps:
+            cap_names = [cap["filename"] for cap in selected_caps]
+            summary_lines.append(f"<b>CAP Files:</b> {', '.join(cap_names)}")
+
+        aid = wizard.get_plugin_value("applet.metadata.aid")
+        if aid:
+            summary_lines.append(f"<b>AID:</b> {aid}")
+
+        self._summary_label.setText("<br>".join(summary_lines))
+
+    def _show_preview_window(self):
+        """Open YAML preview in separate window."""
+        wizard = self.wizard()
+        if wizard:
+            yaml_content = wizard.generate_yaml()
+            dialog = YamlPreviewDialog(yaml_content, self)
+            dialog.exec_()
+
+    def _copy_to_clipboard(self):
+        """Copy YAML to clipboard."""
+        from PyQt5.QtWidgets import QApplication
+        wizard = self.wizard()
+        if wizard:
+            yaml_content = wizard.generate_yaml()
+            QApplication.clipboard().setText(yaml_content)
+            QMessageBox.information(
+                self,
+                "Copied",
+                "YAML copied to clipboard.",
+            )
