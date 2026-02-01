@@ -87,6 +87,7 @@ class ChangeKeyDialog(QDialog):
         self,
         current_key: str = DEFAULT_KEY,
         current_config: Optional[KeyConfiguration] = None,
+        scp_info: Optional[dict] = None,
         parent=None,
     ):
         """
@@ -95,6 +96,9 @@ class ChangeKeyDialog(QDialog):
         Args:
             current_key: Current card key (hex string)
             current_config: Existing KeyConfiguration if available
+            scp_info: Optional dict with SCP detection results:
+                - scp_version: "02", "03", or None
+                - supports_scp03: bool
             parent: Parent widget
         """
         super().__init__(parent)
@@ -103,15 +107,23 @@ class ChangeKeyDialog(QDialog):
 
         self._current_key = current_key
         self._current_config = current_config
+        self._scp_info = scp_info
 
         self._setup_ui()
         self._connect_signals()
         self._load_current_config()
         self._update_key_type_display()
+        self._apply_scp_info()
 
     def _setup_ui(self):
         """Set up the dialog UI."""
         layout = QVBoxLayout(self)
+
+        # SCP detection info (shown if available)
+        self._scp_info_label = QLabel()
+        self._scp_info_label.setWordWrap(True)
+        self._scp_info_label.hide()  # Hidden until we have SCP info
+        layout.addWidget(self._scp_info_label)
 
         # Main key input section
         main_section = self._create_main_key_section()
@@ -272,6 +284,40 @@ class ChangeKeyDialog(QDialog):
             self._aes_radio.setChecked(True)
         else:
             self._des_radio.setChecked(True)
+
+    def _apply_scp_info(self):
+        """Apply SCP detection info to the UI."""
+        if not self._scp_info:
+            return
+
+        scp_version = self._scp_info.get("scp_version")
+        supports_scp03 = self._scp_info.get("supports_scp03", False)
+
+        if scp_version:
+            if supports_scp03:
+                self._scp_info_label.setText(
+                    f"Card uses SCP{scp_version}. "
+                    "This card supports AES keys and separate ENC/MAC/DEK keys."
+                )
+                self._scp_info_label.setStyleSheet(
+                    "background-color: #1a3a1a; color: #90EE90; "
+                    "padding: 8px; border-radius: 4px; margin-bottom: 8px;"
+                )
+                # Default to AES for SCP03 cards
+                self._aes_radio.setChecked(True)
+            else:
+                self._scp_info_label.setText(
+                    f"Card uses SCP{scp_version}. "
+                    "This card uses 3DES keys (legacy mode)."
+                )
+                self._scp_info_label.setStyleSheet(
+                    "background-color: #2a2a1a; color: #FFD700; "
+                    "padding: 8px; border-radius: 4px; margin-bottom: 8px;"
+                )
+                # Default to 3DES for SCP02 cards
+                self._des_radio.setChecked(True)
+
+            self._scp_info_label.show()
 
     def _toggle_advanced(self, expanded: bool):
         """Toggle the advanced section visibility."""

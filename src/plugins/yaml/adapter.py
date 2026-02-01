@@ -177,9 +177,54 @@ class YamlPluginAdapter(BaseAppletPlugin):
                     source.asset_pattern,
                 )
 
+        # Filter by variants if defined - only provide CAPs that are in the variants list
+        if self._schema.applet.variants:
+            variant_filenames = {v.filename for v in self._schema.applet.variants}
+            result = {k: v for k, v in result.items() if k in variant_filenames}
+
         # Cache the cap names for later AID matching
         self._fetched_cap_names = list(result.keys())
         return result
+
+    def get_variant_display_name(self, filename: str) -> str:
+        """
+        Get the display name for a CAP variant.
+
+        Args:
+            filename: The CAP filename
+
+        Returns:
+            Display name from variants config, or filename without extension
+        """
+        # Check if we have variant info
+        for variant in self._schema.applet.variants:
+            if variant.filename == filename:
+                return variant.display_name
+
+        # Fall back to filename without extension
+        if filename.lower().endswith(".cap"):
+            return filename[:-4]
+        return filename
+
+    def get_variants(self) -> list[dict]:
+        """
+        Get all variant definitions.
+
+        Returns:
+            List of variant dicts with filename, display_name, description
+        """
+        return [
+            {
+                "filename": v.filename,
+                "display_name": v.display_name,
+                "description": v.description,
+            }
+            for v in self._schema.applet.variants
+        ]
+
+    def has_variants(self) -> bool:
+        """Check if this plugin has multiple variants defined."""
+        return len(self._schema.applet.variants) > 1
 
     def set_cached_cap_names(self, cap_names: list[str]):
         """

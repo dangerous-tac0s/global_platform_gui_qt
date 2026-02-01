@@ -258,9 +258,9 @@ class MetadataPage(QWizardPage):
         if len(selected_caps) > 1:
             cap_names = [cap["filename"] for cap in selected_caps]
             self._caps_info_label.setText(
-                f"Multiple CAP files selected: {', '.join(cap_names)}\n"
-                "Configure metadata for the primary applet below. "
-                "Each CAP will be available as a separate install option."
+                f"Multiple CAP files selected: {', '.join(cap_names)}\n\n"
+                "Configure shared metadata here. On the next page, you can "
+                "set individual display names for each variant."
             )
             self._caps_info_label.show()
         else:
@@ -419,3 +419,15 @@ class MetadataPage(QWizardPage):
             wizard.set_plugin_data("applet.metadata.mutual_exclusion", exclusions)
 
         return True
+
+    def nextId(self) -> int:
+        """Determine next page - skip variants page if only one CAP."""
+        wizard = self.wizard()
+        if not wizard:
+            return -1
+
+        # Check if we should show variants page (multiple CAPs selected)
+        if wizard._should_show_variants_page():
+            return wizard.PAGE_VARIANTS
+        else:
+            return wizard.PAGE_UI_BUILDER

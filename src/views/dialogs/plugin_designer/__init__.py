@@ -7,6 +7,7 @@ A multi-page wizard for creating YAML plugin definitions through a graphical int
 from .wizard import PluginDesignerWizard
 from .source_page import SourceConfigPage
 from .metadata_page import MetadataPage
+from .variants_page import AppletVariantsPage
 from .ui_builder_page import UIBuilderPage
 from .action_builder_page import ActionBuilderPage
 from .workflow_builder_page import WorkflowBuilderPage
@@ -16,6 +17,7 @@ __all__ = [
     "PluginDesignerWizard",
     "SourceConfigPage",
     "MetadataPage",
+    "AppletVariantsPage",
     "UIBuilderPage",
     "ActionBuilderPage",
     "WorkflowBuilderPage",

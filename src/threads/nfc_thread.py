@@ -739,6 +739,80 @@ class NFCHandlerThread(QThread):
             if not _internal:
                 self.resume()
 
+    def get_card_info(self) -> Optional[Dict[str, Any]]:
+        """
+        Get card information including SCP version.
+
+        Returns:
+            Dict with card info including:
+            - scp_version: "02", "03", or None if unknown
+            - scp_i_param: Implementation parameter (hex)
+            - key_version: Current key version
+            - card_data: Raw card data if available
+            Returns None on error.
+        """
+        if not self.selected_reader_name:
+            return None
+
+        self.pause()
+        self._paused_ack.wait(timeout=1.0)
+
+        try:
+            result = self.run_gp(["--info"], "Unable to get card info:")
+            if result == -1 or not result:
+                return None
+
+            info = {
+                "scp_version": None,
+                "scp_i_param": None,
+                "key_version": None,
+                "supports_scp03": False,
+            }
+
+            for line in result.splitlines():
+                line = line.strip()
+
+                # Parse SCP version (e.g., "SCP version: 03 (i=70)")
+                if "SCP" in line and "version" in line.lower():
+                    import re
+                    # Match patterns like "SCP02", "SCP03", "SCP version: 03"
+                    scp_match = re.search(r'SCP\s*(\d{2})', line, re.IGNORECASE)
+                    if scp_match:
+                        info["scp_version"] = scp_match.group(1)
+                        info["supports_scp03"] = info["scp_version"] == "03"
+
+                    # Match i-parameter (e.g., "i=70" or "(i=70)")
+                    i_match = re.search(r'i\s*=\s*([0-9A-Fa-f]+)', line)
+                    if i_match:
+                        info["scp_i_param"] = i_match.group(1)
+
+                # Parse key version
+                if "key version" in line.lower():
+                    import re
+                    kv_match = re.search(r'(\d+)', line)
+                    if kv_match:
+                        info["key_version"] = kv_match.group(1)
+
+            return info
+
+        except Exception as e:
+            self._emit_error(f"Exception getting card info: {e}")
+            return None
+        finally:
+            self.resume()
+
+    def supports_scp03(self) -> Optional[bool]:
+        """
+        Check if the current card supports SCP03.
+
+        Returns:
+            True if SCP03 supported, False if not, None if detection failed.
+        """
+        info = self.get_card_info()
+        if info:
+            return info.get("supports_scp03", False)
+        return None
+
     # =========================================================================
     # Installation
     # =========================================================================

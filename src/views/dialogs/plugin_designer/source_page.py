@@ -540,10 +540,22 @@ class SourceConfigPage(QWizardPage):
             else:
                 # Multiple CAPs: show selection list
                 self._cap_list.clear()
+
+                # Get existing variants to determine which to check
+                wizard = self.wizard()
+                existing_variants = []
+                if wizard:
+                    variants_data = wizard.get_plugin_value("applet.variants", [])
+                    existing_variants = [v.get("filename", "") for v in variants_data]
+
                 for download_url, filename in assets:
                     item = QListWidgetItem(filename)
                     item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                    item.setCheckState(Qt.Checked)  # Default all selected
+                    # Check if this file was in the saved variants, or check all if no variants saved
+                    if existing_variants:
+                        item.setCheckState(Qt.Checked if filename in existing_variants else Qt.Unchecked)
+                    else:
+                        item.setCheckState(Qt.Checked)  # Default all selected for new plugins
                     self._cap_list.addItem(item)
 
                 self._cap_list_label.show()

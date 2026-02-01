@@ -52,12 +52,13 @@ class ManageTagsDialog(QDialog):
 
         # Table of tags
         self._table = QTableWidget()
-        self._table.setColumnCount(4)
-        self._table.setHorizontalHeaderLabels(["Card ID", "Name", "Has Key", "Key Type"])
+        self._table.setColumnCount(5)
+        self._table.setHorizontalHeaderLabels(["Card ID", "UID", "Name", "Has Key", "Key Type"])
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -111,10 +112,20 @@ class ManageTagsDialog(QDialog):
             id_item.setData(Qt.UserRole, card_id)  # Store original ID
             self._table.setItem(row, 0, id_item)
 
+            # UID (read-only) - shows original UID if card_id is CPLC-based
+            uid = tag_data.get("uid_reference", "")
+            uid_item = QTableWidgetItem(uid if uid else "-")
+            uid_item.setFlags(uid_item.flags() & ~Qt.ItemIsEditable)
+            if uid:
+                uid_item.setToolTip(f"Original card UID: {uid}")
+            else:
+                uid_item.setForeground(Qt.gray)
+            self._table.setItem(row, 1, uid_item)
+
             # Name (editable)
             name = tag_data.get("name", card_id)
             name_item = QTableWidgetItem(name)
-            self._table.setItem(row, 1, name_item)
+            self._table.setItem(row, 2, name_item)
 
             # Has Key
             key = tag_data.get("key")
@@ -125,7 +136,7 @@ class ManageTagsDialog(QDialog):
                 key_item.setForeground(Qt.darkGreen)
             else:
                 key_item.setForeground(Qt.gray)
-            self._table.setItem(row, 2, key_item)
+            self._table.setItem(row, 3, key_item)
 
             # Key Type
             key_config = tag_data.get("key_config")
@@ -150,19 +161,19 @@ class ManageTagsDialog(QDialog):
 
             type_item = QTableWidgetItem(key_type)
             type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
-            self._table.setItem(row, 3, type_item)
+            self._table.setItem(row, 4, type_item)
 
         # Connect item changed for tracking modifications
         self._table.itemChanged.connect(self._on_item_changed)
 
     def _on_item_changed(self, item):
         """Track modifications to table data."""
-        if item.column() == 1:  # Name column
+        if item.column() == 2:  # Name column
             self._modified = True
 
     def _on_cell_double_clicked(self, row, col):
         """Handle double-click on table cells."""
-        if col == 1:  # Name column - allow editing
+        if col == 2:  # Name column - allow editing
             self._table.editItem(self._table.item(row, col))
 
     def _show_context_menu(self, pos):
@@ -205,7 +216,7 @@ class ManageTagsDialog(QDialog):
             return
 
         row = selected[0].row()
-        name_item = self._table.item(row, 1)
+        name_item = self._table.item(row, 2)
         if name_item:
             self._table.editItem(name_item)
 
@@ -297,7 +308,7 @@ class ManageTagsDialog(QDialog):
         tags = self._secure_storage.get("tags", {})
         for row in range(self._table.rowCount()):
             id_item = self._table.item(row, 0)
-            name_item = self._table.item(row, 1)
+            name_item = self._table.item(row, 2)
             if id_item and name_item:
                 card_id = id_item.data(Qt.UserRole)
                 new_name = name_item.text().strip()

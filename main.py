@@ -41,6 +41,7 @@ from cryptography.exceptions import InvalidTag
 
 from dialogs.hex_input_dialog import HexInputDialog
 from src.threads import FileHandlerThread, NFCHandlerThread, resource_path, DEFAULT_KEY
+from src.threads.plugin_fetch_thread import PluginFetchThread
 from secure_storage import SecureStorage
 
 # MVC imports
@@ -56,6 +57,7 @@ from src.events.event_bus import (
     ErrorEvent,
 )
 from src.views.widgets.status_bar import MessageQueue
+from src.views.widgets.loading_indicator import LoadingIndicator
 from src.views.dialogs import KeyPromptDialog, ComboDialog, ChangeKeyDialog, ManageTagsDialog
 from src.views.dialogs.plugin_designer import PluginDesignerWizard
 
@@ -407,6 +409,10 @@ class GPManagerApp(QMainWindow):
         self.layout.addWidget(self.status_label)
         self.message_queue = MessageQueue(self.status_label)
 
+        # Loading indicator (shown during async operations)
+        self.loading_indicator = LoadingIndicator(self)
+        self.layout.addWidget(self.loading_indicator)
+
         # Create the menu bar
         self.menu_bar = self.menuBar()
 
@@ -420,6 +426,7 @@ class GPManagerApp(QMainWindow):
 
         settings_action = QAction("Settings", self)
         settings_action.triggered.connect(self.show_settings)
+
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.quit_app)
         file_menu.addAction(settings_action)
@@ -435,6 +442,11 @@ class GPManagerApp(QMainWindow):
         change_tag_key_action.triggered.connect(self.change_tag_key)
         manage_tags_action = QAction("Manage Known Tags", self)
         manage_tags_action.triggered.connect(self.manage_tags)
+
+        # Store action references for enabling/disabling
+        self._set_tag_name_action = set_tag_name_action
+        self._set_tag_key_action = set_tag_key_action
+        self._change_tag_key_action = change_tag_key_action
         self._manage_tags_action = manage_tags_action
 
         tag_menu.addAction(set_tag_name_action)
@@ -442,7 +454,12 @@ class GPManagerApp(QMainWindow):
         tag_menu.addAction(change_tag_key_action)
         tag_menu.addSeparator()
         tag_menu.addAction(manage_tags_action)
-        tag_menu.setEnabled(False)
+
+        # Initialize actions as disabled - handle_tag_menu will enable appropriately
+        set_tag_name_action.setEnabled(False)
+        set_tag_key_action.setEnabled(False)
+        change_tag_key_action.setEnabled(False)
+        manage_tags_action.setEnabled(False)
 
         self.tag_menu = tag_menu
 
@@ -505,12 +522,7 @@ class GPManagerApp(QMainWindow):
 
         # Load secure storage
         if os.path.exists(DATA_FILE):
-            try:
-                self.secure_storage_instance.load()
-                self.secure_storage = self.secure_storage_instance.get_data()
-            except (InvalidTag, RuntimeError):
-                self.show_error_dialog("Secure storage not decrypted.")
-                self.secure_storage = None
+            self._load_secure_storage_with_retry()
 
             if self.secure_storage:
                 # Make sure all our tags in secure storage are in config
@@ -529,6 +541,9 @@ class GPManagerApp(QMainWindow):
         else:
             # You can opt out... But I'm gonna ask every time.
             self.prompt_setup()
+
+        # Update menu state based on storage status
+        self._update_storage_menu_state()
 
         #
         # Initialize CardController (MVC)
@@ -561,11 +576,24 @@ class GPManagerApp(QMainWindow):
             else:
                 plugin_instance = plugin_cls_or_instance
             plugin_instance.load_storage()
-            if (
+            # Check if cache needs to be invalidated for YAML plugins with variants
+            cache_stale = (
                 not self.config["last_checked"].get(plugin_name, False)
                 or self.config["last_checked"][plugin_name]["last"]
                 <= time.time() - 24 * 60 * 60
-            ):
+            )
+
+            # For YAML plugins with variants, check if cached caps match variants
+            if not cache_stale and hasattr(plugin_instance, 'get_variants'):
+                variants = plugin_instance.get_variants()
+                if variants:
+                    variant_filenames = {v['filename'] for v in variants}
+                    cached_caps = set(self.config["last_checked"].get(plugin_name, {}).get("apps", {}).keys())
+                    # Invalidate cache if it has caps not in variants
+                    if cached_caps and not cached_caps.issubset(variant_filenames):
+                        cache_stale = True
+
+            if cache_stale:
                 caps = plugin_instance.fetch_available_caps()
                 if len(caps.keys()) > 0:
                     self.config["last_checked"][plugin_name] = {}
@@ -681,7 +709,7 @@ class GPManagerApp(QMainWindow):
                 self.nfc_thread.resume()
             else:
                 self.nfc_thread.pause()
-                time.sleep(0.15)
+                # No need to sleep - pause is non-blocking
 
         super().changeEvent(event)
 
@@ -788,7 +816,7 @@ class GPManagerApp(QMainWindow):
         # Create content widget
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setContentsMargins(0, 0, 0, 8)  # Add bottom margin
 
         # Markdown viewer for description
         if description:
@@ -803,8 +831,18 @@ class GPManagerApp(QMainWindow):
             content_layout.addWidget(label)
             content_layout.addStretch()
 
+        # Button container with vertical centering
+        button_container = QWidget()
+        button_container.setFixedHeight(50)  # Fixed height for button area
+        button_container_layout = QVBoxLayout(button_container)
+        button_container_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Add stretch above buttons to center vertically
+        button_container_layout.addStretch()
+
         # Action buttons row
         button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
 
         # Main action button (Install or Uninstall)
         if is_installed:
@@ -837,7 +875,12 @@ class GPManagerApp(QMainWindow):
         back_btn.clicked.connect(self.handle_details_pane_back)
         button_row.addWidget(back_btn)
 
-        content_layout.addLayout(button_row)
+        button_container_layout.addLayout(button_row)
+
+        # Add stretch below buttons to center vertically
+        button_container_layout.addStretch()
+
+        content_layout.addWidget(button_container)
 
         # Check if details pane is already showing
         is_showing_details = (
@@ -941,72 +984,75 @@ class GPManagerApp(QMainWindow):
                 self._current_manage_btn.setEnabled(enabled)
 
     def handle_tag_menu(self):
-        # Tag menu is enabled when we have a key (card connected and authenticated)
-        if self.nfc_thread.key:
-            if self.secure_storage and not self.tag_menu.isEnabled():
-                self.tag_menu.setEnabled(True)
-            elif not self.secure_storage and self.tag_menu.isEnabled():
-                self.tag_menu.setEnabled(False)
-        else:
-            if self.secure_storage and self.tag_menu.isEnabled():
-                self.tag_menu.setEnabled(False)
+        # Actions requiring a tag present (card connected and authenticated with key)
+        tag_present = bool(self.nfc_thread.key and self.secure_storage)
 
-        # "Manage Known Tags" is always available when secure storage exists
+        if hasattr(self, '_set_tag_name_action'):
+            self._set_tag_name_action.setEnabled(tag_present)
+        if hasattr(self, '_set_tag_key_action'):
+            self._set_tag_key_action.setEnabled(tag_present)
+        if hasattr(self, '_change_tag_key_action'):
+            self._change_tag_key_action.setEnabled(tag_present)
+
+        # "Manage Known Tags" is available when secure storage exists
         # (doesn't require a card to be connected)
         if hasattr(self, '_manage_tags_action'):
             self._manage_tags_action.setEnabled(bool(self.secure_storage))
 
     def update_plugin_releases(self):
-        self.message_queue.add_message("Fetching latest plugin releases...")
-        updated = False
-        for plugin_name, plugin_cls_or_instance in self.plugin_map.items():
-            plugin_instance = get_plugin_instance(plugin_cls_or_instance)
-            caps = plugin_instance.fetch_available_caps()
-            plugin_instance.load_storage()
+        """Start background fetch of plugin releases (non-blocking)."""
+        self.loading_indicator.start("Fetching plugin releases...")
 
-            if len(caps.keys()) > 0:
-                updated = True
-                self.config["last_checked"][plugin_name] = {}
-                self.config["last_checked"][plugin_name]["apps"] = caps
-                self.config["last_checked"][plugin_name]["last"] = time.time()
-                self.config["last_checked"][plugin_name]["release"] = list(
-                    caps.values()
-                )[0].split("/")[-2]
+        # Create and start background thread
+        self._plugin_fetch_thread = PluginFetchThread(self.plugin_map, self)
+        self._plugin_fetch_thread.plugin_fetched.connect(self._on_plugin_fetched)
+        self._plugin_fetch_thread.all_complete.connect(self._on_all_plugins_fetched)
+        self._plugin_fetch_thread.error.connect(self._on_plugin_fetch_error)
+        self._plugin_fetch_thread.start()
 
-                self.write_config()
+    def _on_plugin_fetched(self, plugin_name: str, caps: dict):
+        """Handle a single plugin's fetch completion."""
+        if len(caps.keys()) > 0:
+            self.config["last_checked"][plugin_name] = {}
+            self.config["last_checked"][plugin_name]["apps"] = caps
+            self.config["last_checked"][plugin_name]["last"] = time.time()
+            self.config["last_checked"][plugin_name]["release"] = list(
+                caps.values()
+            )[0].split("/")[-2]
 
-                # Update the available list (track all providers)
-                disabled_plugins = self._get_disabled_plugins()
-                for cap_n, url in caps.items():
-                    # Track provider
-                    if cap_n not in self.cap_providers:
-                        self.cap_providers[cap_n] = []
-                    # Update existing entry or add new
-                    provider_entry = (plugin_name, url)
-                    existing = [(p, u) for p, u in self.cap_providers[cap_n] if p == plugin_name]
-                    if existing:
-                        # Update URL for existing provider
-                        self.cap_providers[cap_n] = [
-                            (p, url if p == plugin_name else u)
-                            for p, u in self.cap_providers[cap_n]
-                        ]
-                    else:
-                        self.cap_providers[cap_n].append(provider_entry)
+            # Update the available list (track all providers)
+            disabled_plugins = self._get_disabled_plugins()
+            for cap_n, url in caps.items():
+                # Track provider
+                if cap_n not in self.cap_providers:
+                    self.cap_providers[cap_n] = []
+                # Update existing entry or add new
+                provider_entry = (plugin_name, url)
+                existing = [(p, u) for p, u in self.cap_providers[cap_n] if p == plugin_name]
+                if existing:
+                    # Update URL for existing provider
+                    self.cap_providers[cap_n] = [
+                        (p, url if p == plugin_name else u)
+                        for p, u in self.cap_providers[cap_n]
+                    ]
+                else:
+                    self.cap_providers[cap_n].append(provider_entry)
 
-                    # Update active provider if this one is enabled
-                    if plugin_name not in disabled_plugins:
-                        self.available_apps_info[cap_n] = (plugin_name, url)
+                # Update active provider if this one is enabled
+                if plugin_name not in disabled_plugins:
+                    self.available_apps_info[cap_n] = (plugin_name, url)
 
-                # Update descriptions
+            # Update descriptions
+            plugin_instance = get_plugin_instance(self.plugin_map.get(plugin_name))
+            if plugin_instance:
                 descriptions = plugin_instance.get_descriptions()
-
                 for cap_n, description_md in descriptions.items():
                     self.app_descriptions[cap_n] = description_md
 
-            else:
-                self.message_queue.add_message(
-                    "No apps returned. Check connection and/or url."
-                )
+    def _on_all_plugins_fetched(self, results: dict):
+        """Handle completion of all plugin fetches."""
+        self.loading_indicator.stop()
+        updated = any(len(caps) > 0 for caps in results.values())
 
         if updated:
             self.write_config()  # save state
@@ -1014,6 +1060,10 @@ class GPManagerApp(QMainWindow):
             self.message_queue.add_message("Updated plugin releases.")
         else:
             self.message_queue.add_message("No plugin releases found.")
+
+    def _on_plugin_fetch_error(self, plugin_name: str, error: str):
+        """Handle plugin fetch error."""
+        self.message_queue.add_message(f"Error fetching {plugin_name}: {error}")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_F1:
@@ -1044,7 +1094,6 @@ class GPManagerApp(QMainWindow):
         self.populate_available_list()
         self.update_plugin_releases()
 
-        time.sleep(0.1)
         self.message_queue.add_message("Checking reader for tags...")
         if self.nfc_thread.isRunning():
 
@@ -1067,7 +1116,11 @@ class GPManagerApp(QMainWindow):
         """Handle a new plugin being created."""
         if save_path:
             self.message_queue.add_message(f"Plugin created: {save_path}")
-            # Reload plugins to pick up the new one
+            # Reload plugin map first to pick up the new plugin
+            self.plugin_map = load_plugins()
+            if self.plugin_map:
+                print("Reloaded plugins:", list(self.plugin_map.keys()))
+            # Then fetch releases for all plugins including the new one
             self.update_plugin_releases()
         else:
             self.message_queue.add_message("Plugin YAML generated (not saved)")
@@ -1076,8 +1129,12 @@ class GPManagerApp(QMainWindow):
         """Show the settings dialog."""
         from src.views.dialogs.settings_dialog import SettingsDialog
 
-        dialog = SettingsDialog(self.plugin_map, self.config, self)
+        # Gather storage info for the settings dialog
+        storage_info = self._get_storage_info()
+
+        dialog = SettingsDialog(self.plugin_map, self.config, storage_info, self)
         dialog.refresh_plugins_requested.connect(self._refresh_plugins_after_settings)
+        dialog.reset_storage_requested.connect(self._on_settings_reset_storage)
 
         if dialog.exec_() == dialog.Accepted:
             # Update config with settings
@@ -1090,6 +1147,31 @@ class GPManagerApp(QMainWindow):
                     "Restart Required",
                     "Plugin changes will take effect after restarting the application."
                 )
+
+    def _get_storage_info(self) -> dict:
+        """Get storage information for display in settings."""
+        info = {
+            "file_path": DATA_FILE,
+            "is_loaded": self.secure_storage is not None,
+            "method": "Unknown",
+            "tag_count": 0,
+        }
+
+        if self.secure_storage_instance and self.secure_storage_instance.meta:
+            meta = self.secure_storage_instance.meta
+            if "keywrapping" in meta and "method" in meta["keywrapping"]:
+                info["method"] = meta["keywrapping"]["method"]
+
+        if self.secure_storage:
+            tags = self.secure_storage.get("tags", {})
+            info["tag_count"] = len(tags)
+
+        return info
+
+    def _on_settings_reset_storage(self):
+        """Handle reset storage request from settings dialog."""
+        self._backup_and_create_new_storage()
+        self._update_storage_menu_state()
 
     def _refresh_plugins_after_settings(self):
         """Reload plugins after settings changes (add/edit/delete)."""
@@ -1811,9 +1893,17 @@ class GPManagerApp(QMainWindow):
         # Get current key configuration if available
         current_config = self._get_key_config_for_card(self.nfc_thread.card_id)
 
+        # Detect SCP version from card
+        scp_info = None
+        if self.nfc_thread.key:
+            self.loading_indicator.start("Detecting card protocol...")
+            scp_info = self.nfc_thread.get_card_info()
+            self.loading_indicator.stop()
+
         dialog = ChangeKeyDialog(
             current_key=self.nfc_thread.key or DEFAULT_KEY,
             current_config=current_config,
+            scp_info=scp_info,
             parent=self,
         )
 
@@ -1880,6 +1970,167 @@ class GPManagerApp(QMainWindow):
     def quit_app(self):
 
         QApplication.instance().quit()
+
+    def _load_secure_storage_with_retry(self):
+        """
+        Attempt to load secure storage with user-friendly error handling.
+
+        If unlock fails, offers options to:
+        - Retry (for GPG PIN entry issues)
+        - Create new storage (backs up old file)
+        - Continue without secure storage
+        """
+        max_retries = 3
+        retry_count = 0
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                self.secure_storage_instance.load()
+                self.secure_storage = self.secure_storage_instance.get_data()
+                return  # Success!
+            except FileNotFoundError:
+                # File was deleted between check and load
+                self.secure_storage = None
+                return
+            except (InvalidTag, RuntimeError) as e:
+                last_error = e
+                retry_count += 1
+
+                # Determine error type for user message
+                error_str = str(e).lower()
+                if "key not found" in error_str or "keyring" in error_str:
+                    error_type = "keyring"
+                    error_msg = (
+                        "The encryption key was not found in your system keyring.\n\n"
+                        "This can happen if:\n"
+                        "• The keyring was cleared or reset\n"
+                        "• You're on a different user account\n"
+                        "• The system keyring service changed"
+                    )
+                elif "gpg" in error_str or "decrypt" in error_str:
+                    error_type = "gpg"
+                    error_msg = (
+                        "GPG decryption failed.\n\n"
+                        "This can happen if:\n"
+                        "• The GPG key is no longer available\n"
+                        "• The PIN/passphrase entry was cancelled\n"
+                        "• The smart card with the GPG key is not present"
+                    )
+                else:
+                    error_type = "unknown"
+                    error_msg = (
+                        f"Failed to decrypt secure storage.\n\n"
+                        f"Error: {e}"
+                    )
+
+                # Show dialog with options
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Secure Storage Unlock Failed")
+                msg_box.setIcon(QMessageBox.Warning)
+                msg_box.setText("Could not unlock your secure storage.")
+                msg_box.setInformativeText(error_msg)
+
+                # Add buttons based on context
+                retry_btn = msg_box.addButton("Try Again", QMessageBox.ActionRole)
+                new_btn = msg_box.addButton("Create New", QMessageBox.AcceptRole)
+                skip_btn = msg_box.addButton("Continue Without", QMessageBox.RejectRole)
+
+                # Add note about data safety
+                msg_box.setDetailedText(
+                    "Your existing secure storage file will NOT be deleted.\n\n"
+                    "If you choose 'Create New':\n"
+                    f"• The old file will be backed up as '{DATA_FILE}.backup'\n"
+                    "• A new empty secure storage will be created\n"
+                    "• Your old data can be recovered if you restore the backup\n\n"
+                    "If you choose 'Continue Without':\n"
+                    "• Card keys will not be saved between sessions\n"
+                    "• You can set up secure storage later from File menu"
+                )
+
+                msg_box.exec_()
+                clicked = msg_box.clickedButton()
+
+                if clicked == retry_btn:
+                    # Try again (loop continues)
+                    continue
+                elif clicked == new_btn:
+                    # Back up old file and create new storage
+                    self._backup_and_create_new_storage()
+                    return
+                else:  # skip_btn or closed
+                    self.secure_storage = None
+                    return
+
+        # Exhausted retries
+        self.secure_storage = None
+
+    def _setup_secure_storage_from_menu(self):
+        """Allow user to set up secure storage from the File menu."""
+        if self.secure_storage:
+            reply = QMessageBox.question(
+                self,
+                "Secure Storage Exists",
+                "Secure storage is already set up.\n\n"
+                "Do you want to reset it? This will back up your existing data first.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            # Back up and recreate
+            self._backup_and_create_new_storage()
+        else:
+            # No existing storage - just set it up
+            if os.path.exists(DATA_FILE):
+                # File exists but couldn't be unlocked
+                self._backup_and_create_new_storage()
+            else:
+                self.prompt_setup()
+
+        # Update menu state
+        self._update_storage_menu_state()
+
+    def _update_storage_menu_state(self):
+        """Update storage-related UI state. Now a no-op since storage is managed in Settings."""
+        pass
+
+    def _backup_and_create_new_storage(self):
+        """Back up the existing storage file and prompt for new storage creation."""
+        import shutil
+        from datetime import datetime
+
+        # Create backup with timestamp
+        backup_path = f"{DATA_FILE}.backup"
+
+        # If backup already exists, add timestamp
+        if os.path.exists(backup_path):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{DATA_FILE}.backup.{timestamp}"
+
+        try:
+            shutil.copy2(DATA_FILE, backup_path)
+            # Remove the old file so prompt_setup creates a new one
+            os.remove(DATA_FILE)
+
+            QMessageBox.information(
+                self,
+                "Backup Created",
+                f"Your old secure storage has been backed up to:\n{backup_path}\n\n"
+                "Now let's set up a new secure storage.",
+            )
+
+            # Trigger new storage setup
+            self.prompt_setup()
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Backup Failed",
+                f"Could not create backup: {e}\n\n"
+                "Continuing without secure storage to avoid data loss.",
+            )
+            self.secure_storage = None
 
     def prompt_setup(self):
         def initialize_and_accept():
@@ -1954,7 +2205,8 @@ class GPManagerApp(QMainWindow):
         if not self.secure_storage_instance:
             return
         self.nfc_thread.pause()
-        time.sleep(0.15)
+        # Wait for NFC thread to acknowledge pause (non-blocking with timeout)
+        self.nfc_thread._paused_ack.wait(timeout=0.5)
         self.secure_storage_instance.save()
         self.nfc_thread.resume()
 

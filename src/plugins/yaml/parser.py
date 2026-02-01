@@ -217,9 +217,29 @@ class YamlPluginParser:
         source_data = self._require(data, "source", "applet")
         metadata_data = self._require(data, "metadata", "applet")
 
+        # Parse variants if present
+        variants = []
+        for variant_data in self._get(data, "variants", []):
+            variants.append(self._parse_variant(variant_data))
+
         return AppletDefinition(
             source=self._parse_source(source_data),
             metadata=self._parse_metadata(metadata_data),
+            variants=variants,
+        )
+
+    def _parse_variant(self, data: dict) -> "VariantDefinition":
+        """Parse a variant definition."""
+        from .schema import VariantDefinition
+
+        filename = self._require(data, "filename", "variant")
+        display_name = self._require(data, "display_name", "variant")
+        description = self._get(data, "description")
+
+        return VariantDefinition(
+            filename=filename,
+            display_name=display_name,
+            description=description,
         )
 
     def _parse_source(self, data: dict) -> SourceDefinition:

@@ -45,10 +45,11 @@ class PluginDesignerWizard(QWizard):
     1. Source Config - CAP file source (local, HTTP, GitHub) - FIRST to enable auto-population
     2. Basic Info - Plugin name, description, author (can be pre-filled from GitHub)
     3. Metadata - AID, storage requirements, mutual exclusions
-    4. UI Builder - Form fields for installation parameters
-    5. Action Builder - Management actions for installed applets
-    6. Workflow Builder - Multi-step workflows for complex operations
-    7. Preview - Final YAML preview with export option
+    4. Variants (conditional) - Per-CAP naming when multiple CAPs selected
+    5. UI Builder - Form fields for installation parameters
+    6. Action Builder - Management actions for installed applets
+    7. Workflow Builder - Multi-step workflows for complex operations
+    8. Preview - Final YAML preview with export option
     """
 
     plugin_created = pyqtSignal(str, str)  # yaml_content, save_path
@@ -57,10 +58,11 @@ class PluginDesignerWizard(QWizard):
     PAGE_SOURCE = 0
     PAGE_INTRO = 1
     PAGE_METADATA = 2
-    PAGE_UI_BUILDER = 3
-    PAGE_ACTION_BUILDER = 4
-    PAGE_WORKFLOW_BUILDER = 5
-    PAGE_PREVIEW = 6
+    PAGE_VARIANTS = 3  # Only shown when multiple CAPs selected
+    PAGE_UI_BUILDER = 4
+    PAGE_ACTION_BUILDER = 5
+    PAGE_WORKFLOW_BUILDER = 6
+    PAGE_PREVIEW = 7
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -105,20 +107,29 @@ class PluginDesignerWizard(QWizard):
         from .metadata_page import MetadataPage
         self.setPage(self.PAGE_METADATA, MetadataPage(self))
 
-        # Page 4: UI Builder
+        # Page 4: Variants (conditionally shown)
+        from .variants_page import AppletVariantsPage
+        self.setPage(self.PAGE_VARIANTS, AppletVariantsPage(self))
+
+        # Page 5: UI Builder
         from .ui_builder_page import UIBuilderPage
         self.setPage(self.PAGE_UI_BUILDER, UIBuilderPage(self))
 
-        # Page 5: Action Builder
+        # Page 6: Action Builder
         from .action_builder_page import ActionBuilderPage
         self.setPage(self.PAGE_ACTION_BUILDER, ActionBuilderPage(self))
 
-        # Page 6: Workflow Builder
+        # Page 7: Workflow Builder
         from .workflow_builder_page import WorkflowBuilderPage
         self.setPage(self.PAGE_WORKFLOW_BUILDER, WorkflowBuilderPage(self))
 
-        # Page 7: Preview
+        # Page 8: Preview
         self.setPage(self.PAGE_PREVIEW, PreviewPage(self))
+
+    def _should_show_variants_page(self) -> bool:
+        """Check if variants page should be shown (multiple CAPs selected)."""
+        selected_caps = self.get_plugin_value("_selected_caps", [])
+        return len(selected_caps) > 1
 
     def get_plugin_data(self) -> dict:
         """Get the current plugin data."""
@@ -150,17 +161,49 @@ class PluginDesignerWizard(QWizard):
 
     def generate_yaml(self) -> str:
         """Generate YAML from the current plugin data."""
-        # Clean up the data
-        data = self._clean_plugin_data(self._plugin_data.copy())
+        # Make a deep copy to avoid modifying original
+        import copy
+        data = copy.deepcopy(self._plugin_data)
+
+        # Convert internal variant configs to proper YAML structure
+        variant_configs = data.pop("_variant_configs", None)
+        selected_caps = data.pop("_selected_caps", None)
+
+        if variant_configs and len(variant_configs) > 1:
+            # Multiple variants - add to applet section
+            variants = []
+            for vc in variant_configs:
+                variant_entry = {
+                    "filename": vc.get("filename", ""),
+                    "display_name": vc.get("display_name", ""),
+                }
+                if vc.get("description"):
+                    variant_entry["description"] = vc["description"]
+                variants.append(variant_entry)
+
+            if "applet" not in data:
+                data["applet"] = {}
+            data["applet"]["variants"] = variants
+
+        # Remove other internal keys (starting with _)
+        keys_to_remove = [k for k in data.keys() if k.startswith("_")]
+        for k in keys_to_remove:
+            del data[k]
+
+        # Clean up the data (remove empty values)
+        data = self._clean_plugin_data(data)
         return yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     def _clean_plugin_data(self, data: dict) -> dict:
-        """Remove empty/None values from plugin data."""
+        """Remove empty/None values and internal keys from plugin data."""
         if not isinstance(data, dict):
             return data
 
         cleaned = {}
         for key, value in data.items():
+            # Skip internal keys (starting with _)
+            if key.startswith("_"):
+                continue
             if value is None:
                 continue
             if isinstance(value, dict):
@@ -293,6 +336,9 @@ class PluginDesignerWizard(QWizard):
                 self._plugin_data["applet"]["source"] = data["applet"]["source"]
             if "metadata" in data["applet"]:
                 self._plugin_data["applet"]["metadata"] = data["applet"]["metadata"]
+            if "variants" in data["applet"]:
+                # Store variants for the source page to use
+                self._plugin_data["applet"]["variants"] = data["applet"]["variants"]
 
         if "install_ui" in data:
             self._plugin_data["install_ui"] = data["install_ui"]
@@ -585,13 +631,19 @@ class PreviewPage(QWizardPage):
         plugin_version = wizard.get_plugin_value("plugin.version", "1.0.0")
         source_type = wizard.get_plugin_value("applet.source.type", "unknown")
         selected_caps = wizard.get_plugin_value("_selected_caps", [])
+        variant_configs = wizard.get_plugin_value("_variant_configs", [])
 
         summary_lines = [
             f"<b>Plugin:</b> {plugin_name} v{plugin_version}",
             f"<b>Source:</b> {source_type}",
         ]
 
-        if selected_caps:
+        # Show variant info if multiple CAPs
+        if variant_configs and len(variant_configs) > 1:
+            summary_lines.append(f"<b>Variants:</b> {len(variant_configs)}")
+            for vc in variant_configs:
+                summary_lines.append(f"  • {vc.get('display_name', vc.get('filename', 'Unknown'))}")
+        elif selected_caps:
             cap_names = [cap["filename"] for cap in selected_caps]
             summary_lines.append(f"<b>CAP Files:</b> {', '.join(cap_names)}")
 

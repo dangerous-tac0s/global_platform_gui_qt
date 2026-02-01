@@ -242,10 +242,19 @@ class AppletMetadata:
 
 
 @dataclass
+class VariantDefinition:
+    """Definition of a CAP file variant for multi-CAP plugins."""
+    filename: str  # CAP filename (e.g., "SmartPGP-default.cap")
+    display_name: str  # Friendly display name (e.g., "SmartPGP Default")
+    description: Optional[str] = None  # Optional description
+
+
+@dataclass
 class AppletDefinition:
     """Complete applet definition."""
     source: SourceDefinition
     metadata: AppletMetadata
+    variants: list[VariantDefinition] = field(default_factory=list)  # For multi-CAP plugins
 
 
 # ============================================================================
