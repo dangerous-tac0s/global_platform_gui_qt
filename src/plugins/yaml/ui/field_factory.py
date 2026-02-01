@@ -123,6 +123,8 @@ class FieldWidget(QWidget):
             widget.setPlaceholderText(self.field_def.placeholder)
         if self.field_def.default is not None:
             widget.setText(str(self.field_def.default))
+        if self.field_def.readonly:
+            widget.setReadOnly(True)
 
         widget.textChanged.connect(self._on_text_changed)
         return widget
@@ -162,12 +164,16 @@ class FieldWidget(QWidget):
         widget.stateChanged.connect(self._on_checkbox_changed)
         return widget
 
-    def _create_hex_editor(self) -> QTextEdit:
-        """Create a hex editor widget."""
-        widget = QTextEdit()
-        widget.setAcceptRichText(False)
-        widget.setMinimumHeight(self.field_def.rows * 20)
-        widget.setMaximumHeight(self.field_def.rows * 25)
+    def _create_hex_editor(self) -> QWidget:
+        """Create a hex editor widget with validation."""
+        from .widgets.hex_editor import HexEditorWidget
+
+        widget = HexEditorWidget(
+            auto_format=True,
+            show_byte_count=True,
+            min_rows=max(1, self.field_def.rows // 2),
+            max_rows=self.field_def.rows,
+        )
 
         if self.field_def.placeholder:
             widget.setPlaceholderText(self.field_def.placeholder)
@@ -265,12 +271,18 @@ class FieldWidget(QWidget):
         value = state == Qt.Checked
         self._validate_and_emit(value)
 
-    def _on_hex_changed(self):
+    def _on_hex_changed(self, text: str = None):
         """Handle hex editor changes."""
+        from .widgets.hex_editor import HexEditorWidget
+
         widget = self._input_widget
-        if isinstance(widget, QTextEdit):
+        if isinstance(widget, HexEditorWidget):
+            # HexEditorWidget passes cleaned hex string directly
+            hex_text = text if text is not None else widget.getText()
+            self._validate_and_emit(hex_text)
+        elif isinstance(widget, QTextEdit):
+            # Fallback for plain QTextEdit
             text = widget.toPlainText()
-            # Apply uppercase transform for hex
             if self.field_def.transform == "uppercase":
                 transformed = text.upper()
                 if transformed != text:
@@ -282,7 +294,6 @@ class FieldWidget(QWidget):
                     widget.setTextCursor(cursor)
                     widget.blockSignals(False)
                     text = transformed
-
             self._validate_and_emit(text)
 
     def _on_number_changed(self, value: int):
@@ -372,6 +383,8 @@ class FieldWidget(QWidget):
 
     def getValue(self) -> Any:
         """Get the current value of the field."""
+        from .widgets.hex_editor import HexEditorWidget
+
         widget = self._input_widget
 
         if isinstance(widget, QLineEdit):
@@ -380,6 +393,8 @@ class FieldWidget(QWidget):
             return widget.currentData()
         elif isinstance(widget, QCheckBox):
             return widget.isChecked()
+        elif isinstance(widget, HexEditorWidget):
+            return widget.getText()
         elif isinstance(widget, QTextEdit):
             return widget.toPlainText()
         elif isinstance(widget, QSpinBox):
@@ -391,6 +406,8 @@ class FieldWidget(QWidget):
 
     def setValue(self, value: Any):
         """Set the field value."""
+        from .widgets.hex_editor import HexEditorWidget
+
         widget = self._input_widget
 
         if isinstance(widget, QLineEdit):
@@ -401,6 +418,8 @@ class FieldWidget(QWidget):
                 widget.setCurrentIndex(index)
         elif isinstance(widget, QCheckBox):
             widget.setChecked(bool(value))
+        elif isinstance(widget, HexEditorWidget):
+            widget.setText(str(value) if value is not None else "")
         elif isinstance(widget, QTextEdit):
             widget.setText(str(value) if value is not None else "")
         elif isinstance(widget, QSpinBox):
@@ -520,6 +539,37 @@ class ConditionalFieldManager(QObject):
                 for field_widget, show_when in dependents:
                     visible = self._evaluate_show_when(show_when, value)
                     field_widget.setVisible(visible)
+
+    def should_include_field(self, field_id: str) -> bool:
+        """
+        Check if a field should be included based on show_when conditions.
+
+        This evaluates the show_when condition independently of Qt's isVisible(),
+        which can be affected by tab visibility.
+
+        Args:
+            field_id: The field ID to check
+
+        Returns:
+            True if the field should be included in values/validation
+        """
+        if field_id not in self._fields:
+            return False
+
+        field_widget = self._fields[field_id]
+        show_when = field_widget.field_def.show_when
+
+        # If no show_when condition, always include
+        if show_when is None:
+            return True
+
+        # Evaluate the show_when condition
+        dep_field_id = show_when.field
+        if dep_field_id not in self._fields:
+            return True  # Can't evaluate, include by default
+
+        dep_value = self._fields[dep_field_id].getValue()
+        return self._evaluate_show_when(show_when, dep_value)
 
 
 class CrossFieldValidator(QObject):

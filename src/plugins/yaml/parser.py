@@ -240,11 +240,23 @@ class YamlPluginParser:
             owner=self._get(data, "owner"),
             repo=self._get(data, "repo"),
             asset_pattern=self._get(data, "asset_pattern"),
+            extract_pattern=self._get(data, "extract_pattern"),
         )
 
     def _parse_metadata(self, data: dict) -> AppletMetadata:
         """Parse applet metadata."""
         name = self._require(data, "name", "metadata")
+
+        # Validate AID if provided
+        aid = self._get(data, "aid")
+        if aid:
+            # Normalize and validate the AID
+            normalized_aid = aid.upper().replace(" ", "")
+            try:
+                validate_aid(normalized_aid)
+            except YamlParseError as e:
+                raise self._error(str(e))
+            aid = normalized_aid
 
         aid_construction = None
         if "aid_construction" in data:
@@ -260,7 +272,7 @@ class YamlPluginParser:
 
         return AppletMetadata(
             name=name,
-            aid=self._get(data, "aid"),
+            aid=aid,
             aid_construction=aid_construction,
             storage=storage,
             mutual_exclusion=self._get(data, "mutual_exclusion", []),
@@ -270,19 +282,36 @@ class YamlPluginParser:
     def _parse_aid_construction(self, data: dict) -> AIDConstruction:
         """Parse dynamic AID construction rules."""
         base = self._require(data, "base", "aid_construction")
-        segments = []
 
+        # Validate base is valid hex
+        normalized_base = base.upper().replace(" ", "")
+        try:
+            validate_hex_string(normalized_base, "aid_construction.base")
+        except YamlParseError as e:
+            raise self._error(str(e))
+
+        segments = []
         for seg_data in self._get(data, "segments", []):
+            # Validate default value if provided
+            default = self._get(seg_data, "default")
+            if default:
+                normalized_default = default.upper().replace(" ", "")
+                try:
+                    validate_hex_string(normalized_default, "aid_construction.segment.default")
+                except YamlParseError as e:
+                    raise self._error(str(e))
+                default = normalized_default
+
             segments.append(
                 AIDSegment(
                     name=self._require(seg_data, "name", "aid_construction.segment"),
                     length=self._require(seg_data, "length", "aid_construction.segment"),
                     source=self._get(seg_data, "source"),
-                    default=self._get(seg_data, "default"),
+                    default=default,
                 )
             )
 
-        return AIDConstruction(base=base, segments=segments)
+        return AIDConstruction(base=normalized_base, segments=segments)
 
     def _parse_install_ui(self, data: dict) -> InstallUIDefinition:
         """Parse installation UI definition."""
@@ -397,6 +426,8 @@ class YamlPluginParser:
             transform=self._get(data, "transform"),
             rows=self._get(data, "rows", 4),
             description=self._get(data, "description"),
+            width=self._get(data, "width", 1.0),
+            readonly=self._get(data, "readonly", False),
         )
 
     def _parse_management_ui(self, data: dict) -> ManagementUIDefinition:
@@ -462,6 +493,8 @@ class YamlPluginParser:
             offset=self._get(parse_data, "offset", 0),
             length=self._get(parse_data, "length"),
             tag=self._get(parse_data, "tag"),
+            encoding=self._get(parse_data, "encoding"),
+            format=self._get(parse_data, "format"),
             display=self._get(parse_data, "display"),
             display_map=self._get(parse_data, "display_map"),
         )
@@ -471,6 +504,7 @@ class YamlPluginParser:
             label=self._get(data, "label", reader_id),
             apdu=self._require(data, "apdu", f"state_reader '{reader_id}'"),
             parse=state_parse,
+            select_file=self._get(data, "select_file"),
         )
 
     def _parse_parameters(self, data: dict) -> ParameterDefinition:

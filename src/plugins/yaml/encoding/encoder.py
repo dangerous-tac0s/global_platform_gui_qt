@@ -82,6 +82,9 @@ class TemplateProcessor:
 
         return cls.COND_PATTERN.sub(replace_conditional, template)
 
+    # Pattern for combined length expressions like {field1+field2_length}
+    COMBINED_LENGTH_PATTERN = re.compile(r'^(.+?)_length$')
+
     @classmethod
     def _process_variables(
         cls,
@@ -94,19 +97,58 @@ class TemplateProcessor:
             var_name = match.group(1)
             format_spec = match.group(2)
 
-            # Check for special suffixes
+            # First check if the exact variable name exists in values
+            # This allows pre-computed values (like from dialog step) to override computation
+            if var_name in values:
+                value = values[var_name]
+                if format_spec:
+                    try:
+                        return format(value, format_spec)
+                    except (ValueError, TypeError):
+                        return str(value)
+                return str(value)
+
+            # Check for special suffixes (computed if not in values)
+            # _ascii_hex: Always encode as ASCII (for PINs, text fields)
+            if var_name.endswith('_ascii_hex'):
+                base_name = var_name[:-10]
+                value = values.get(base_name, "")
+                return cls._to_ascii_hex(value)
+
+            # _hex: Auto-detect (existing hex stays as-is, text gets encoded)
             if var_name.endswith('_hex'):
                 base_name = var_name[:-4]
                 value = values.get(base_name, "")
                 return cls._to_hex(value)
 
-            if var_name.endswith('_length'):
-                base_name = var_name[:-7]
+            # _ascii_length: Length of ASCII-encoded value (for PINs, text)
+            if var_name.endswith('_ascii_length'):
+                base_name = var_name[:-13]
                 value = values.get(base_name, "")
-                length = len(cls._to_hex(value)) // 2
+                # ASCII length is just the string length
+                length = len(str(value))
                 if format_spec:
                     return format(length, format_spec)
                 return str(length)
+
+            if var_name.endswith('_length'):
+                base_name = var_name[:-7]
+                # Check for combined length (field1+field2_length)
+                if '+' in base_name:
+                    field_names = [f.strip() for f in base_name.split('+')]
+                    total_length = 0
+                    for field_name in field_names:
+                        value = values.get(field_name, "")
+                        total_length += len(cls._to_hex(value)) // 2
+                    if format_spec:
+                        return format(total_length, format_spec)
+                    return str(total_length)
+                else:
+                    value = values.get(base_name, "")
+                    length = len(cls._to_hex(value)) // 2
+                    if format_spec:
+                        return format(length, format_spec)
+                    return str(length)
 
             # Check for custom encoder
             if var_name in encoders:
@@ -128,7 +170,7 @@ class TemplateProcessor:
 
     @staticmethod
     def _to_hex(value: Any) -> str:
-        """Convert a value to hex string."""
+        """Convert a value to hex string (auto-detect)."""
         if isinstance(value, bytes):
             return value.hex().upper()
         elif isinstance(value, str):
@@ -141,6 +183,20 @@ class TemplateProcessor:
             return format(value, 'X')
         else:
             return str(value).encode('utf-8').hex().upper()
+
+    @staticmethod
+    def _to_ascii_hex(value: Any) -> str:
+        """Convert a value to hex by encoding as ASCII (for PINs, text)."""
+        if isinstance(value, bytes):
+            return value.hex().upper()
+        elif isinstance(value, str):
+            # Always encode as ASCII, even if it looks like hex
+            return value.encode('ascii', errors='replace').hex().upper()
+        elif isinstance(value, int):
+            # Convert number to string first, then encode
+            return str(value).encode('ascii').hex().upper()
+        else:
+            return str(value).encode('ascii', errors='replace').hex().upper()
 
 
 class TLVBuilder:

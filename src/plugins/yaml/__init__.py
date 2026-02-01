@@ -39,6 +39,13 @@ from .loader import (
     load_yaml_plugin,
 )
 
+from .logging import (
+    logger,
+    configure_logging,
+    set_debug_enabled,
+    is_debug_enabled,
+)
+
 __all__ = [
     # Schema classes
     "PluginSchema",
@@ -68,4 +75,9 @@ __all__ = [
     "YamlPluginLoader",
     "discover_yaml_plugins",
     "load_yaml_plugin",
+    # Logging
+    "logger",
+    "configure_logging",
+    "set_debug_enabled",
+    "is_debug_enabled",
 ]

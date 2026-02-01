@@ -28,9 +28,12 @@ ALLOWED_IMPORTS = {
     "binascii": "binascii",
     "base64": "base64",
     "json": "json",
+    "time": "time",
     "datetime": "datetime",
     "os.path": "os.path",
     "tempfile": "tempfile",
+    # NDEF library for NFC Data Exchange Format encoding/decoding
+    "ndef": "ndef",
 }
 
 # Blocked function names

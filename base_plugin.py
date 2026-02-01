@@ -60,6 +60,38 @@ class BaseAppletPlugin(ABC):
     def post_uninstall(self, **kwargs):
         pass
 
+    def get_management_actions(self) -> list[dict]:
+        """
+        Return a list of management actions available for installed applets.
+
+        Each action should be a dict with:
+            - id: Unique action identifier
+            - label: Human-readable label for the action
+            - description: Optional description
+            - dialog_fields: Optional list of FieldDefinition for input dialog
+            - workflow: Optional workflow ID to execute
+            - apdu_sequence: Optional list of APDU templates
+
+        Returns:
+            List of action definitions, or empty list if none available
+        """
+        return []
+
+    def get_state_readers(self) -> list[dict]:
+        """
+        Return a list of state reader definitions for monitoring applet state.
+
+        Each reader should be a dict with:
+            - id: Unique reader identifier
+            - label: Human-readable label
+            - apdu: APDU to send to read state
+            - parse: Parse definition (type, offset, length, display)
+
+        Returns:
+            List of state reader definitions, or empty list if none available
+        """
+        return []
+
     def auto_import_plugins(cls, package, override_map):
         base_dir = os.path.dirname(__file__)  # Get directory of the current file
         this_dir = os.path.join(base_dir, "repos", package)

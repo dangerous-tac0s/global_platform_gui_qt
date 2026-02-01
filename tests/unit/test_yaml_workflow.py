@@ -145,6 +145,20 @@ class TestSandboxedContext:
 
         callback.assert_called_once_with("Progress message", -1)
 
+    def test_get_step_result(self):
+        """Test getting step results through sandboxed context."""
+        ctx = WorkflowContext()
+        ctx.set_step_result("generate", {"response_hex": "7F490102AABBCCDD", "sw": "9000"})
+        sandbox = SandboxedContext(ctx)
+
+        result = sandbox.get_step_result("generate")
+        assert result is not None
+        assert result["response_hex"] == "7F490102AABBCCDD"
+        assert result["sw"] == "9000"
+
+        # Non-existent step should return None
+        assert sandbox.get_step_result("nonexistent") is None
+
 
 class TestStepResult:
     """Tests for StepResult class."""
@@ -347,7 +361,7 @@ class TestApduStep:
 
         # Mock NFC thread service - returns raw response bytes
         mock_nfc = Mock()
-        mock_nfc.send_apdu.return_value = bytes.fromhex("9000")
+        mock_nfc.transmit_apdu.return_value = bytes.fromhex("9000")
 
         ctx = WorkflowContext()
         ctx.register_service("nfc_thread", mock_nfc)
@@ -355,7 +369,7 @@ class TestApduStep:
         result = step.execute(ctx)
 
         assert result.success
-        mock_nfc.send_apdu.assert_called_once()
+        mock_nfc.transmit_apdu.assert_called_once()
 
     def test_apdu_with_template(self):
         """Test APDU with template substitution."""
@@ -366,7 +380,7 @@ class TestApduStep:
         )
 
         mock_nfc = Mock()
-        mock_nfc.send_apdu.return_value = bytes.fromhex("9000")
+        mock_nfc.transmit_apdu.return_value = bytes.fromhex("9000")
 
         # Provide a hex value directly - it won't be re-encoded
         ctx = WorkflowContext(initial_values={"aid": "D276000124010304"})
@@ -376,7 +390,7 @@ class TestApduStep:
 
         assert result.success
         # Verify the APDU was sent correctly
-        call_args = mock_nfc.send_apdu.call_args[0][0]
+        call_args = mock_nfc.transmit_apdu.call_args[0][0]
         # The APDU should contain the AID bytes
         assert bytes.fromhex("D276000124010304") in call_args
 
@@ -389,7 +403,7 @@ class TestApduStep:
         )
 
         mock_nfc = Mock()
-        mock_nfc.send_apdu.return_value = bytes.fromhex("9000")
+        mock_nfc.transmit_apdu.return_value = bytes.fromhex("9000")
 
         ctx = WorkflowContext()
         ctx.register_service("nfc_thread", mock_nfc)
@@ -406,7 +420,7 @@ class TestApduStep:
         )
 
         mock_nfc = Mock()
-        mock_nfc.send_apdu.return_value = bytes.fromhex("6A82")
+        mock_nfc.transmit_apdu.return_value = bytes.fromhex("6A82")
 
         ctx = WorkflowContext()
         ctx.register_service("nfc_thread", mock_nfc)
@@ -441,7 +455,7 @@ class TestApduStep:
 
         mock_nfc = Mock()
         # Response: 16 bytes of data + 9000 SW
-        mock_nfc.send_apdu.return_value = bytes.fromhex("0102030405060708090A0B0C0D0E0F109000")
+        mock_nfc.transmit_apdu.return_value = bytes.fromhex("0102030405060708090A0B0C0D0E0F109000")
 
         ctx = WorkflowContext()
         ctx.register_service("nfc_thread", mock_nfc)

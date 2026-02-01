@@ -284,6 +284,47 @@ class NFCHandlerThread(QThread):
                 except Exception:
                     pass
 
+    def transmit_apdu(self, apdu: bytes) -> bytes:
+        """
+        Transmit an APDU to the card and return the response.
+
+        Args:
+            apdu: APDU bytes to send
+
+        Returns:
+            Response bytes including status word
+        """
+        connection = None
+        try:
+            filtered_readers = [
+                r for r in readers() if "SAM" not in str(r).upper()
+            ]
+            reader = next(
+                x for x in filtered_readers
+                if self.selected_reader_name in str(x)
+            )
+            connection = reader.createConnection()
+            connection.connect()
+
+            # Convert bytes to list of ints for pyscard
+            apdu_list = list(apdu)
+            data, sw1, sw2 = connection.transmit(apdu_list)
+
+            # Return response data + status word as bytes
+            response = bytes(data) + bytes([sw1, sw2])
+            return response
+
+        except Exception as e:
+            print(f"APDU transmission error: {e}")
+            # Return error status word
+            return bytes([0x6F, 0x00])
+        finally:
+            if connection:
+                try:
+                    connection.disconnect()
+                except Exception:
+                    pass
+
     def is_jcop(self, reader_name: str) -> bool:
         """
         Check if the card is a JavaCard (JCOP).

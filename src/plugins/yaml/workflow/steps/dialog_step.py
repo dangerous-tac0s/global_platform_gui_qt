@@ -48,6 +48,8 @@ class DialogStep(BaseStep):
 
     def execute(self, context: WorkflowContext) -> StepResult:
         """Show the dialog and collect input."""
+        from ...encoding.encoder import TemplateProcessor
+
         context.report_progress(
             self.description or f"Waiting for input: {self.name}..."
         )
@@ -57,16 +59,42 @@ class DialogStep(BaseStep):
             return self._execute_headless(context)
 
         try:
-            # Create the dialog
+            # Process template variables in field defaults before creating dialog
+            variables = context.get_all_variables()
+            processed_fields = []
+            for field in self.fields:
+                # Create a copy of the field with processed default
+                if field.default and isinstance(field.default, str) and "{" in field.default:
+                    processed_default = TemplateProcessor.process(field.default, variables)
+                    # Create new field with processed default
+                    processed_field = FieldDefinition(
+                        id=field.id,
+                        type=field.type,
+                        label=field.label,
+                        description=field.description,
+                        placeholder=field.placeholder,
+                        default=processed_default,
+                        required=field.required,
+                        options=field.options,
+                        validation=field.validation,
+                        show_when=field.show_when,
+                        transform=field.transform,
+                        readonly=field.readonly,
+                    )
+                    processed_fields.append(processed_field)
+                else:
+                    processed_fields.append(field)
+
+            # Create the dialog with processed fields
             if self._dialog_factory:
-                dialog = self._dialog_factory(self.fields, self.title)
+                dialog = self._dialog_factory(processed_fields, self.title)
             else:
-                form_def = FormDefinition(fields=self.fields)
+                form_def = FormDefinition(fields=processed_fields)
                 dialog = DialogBuilder.build_from_form(form_def, self.title)
 
             # Pre-populate with existing context values
             prefill = {}
-            for field in self.fields:
+            for field in processed_fields:
                 value = context.get(field.id)
                 if value is not None:
                     prefill[field.id] = value
@@ -83,12 +111,18 @@ class DialogStep(BaseStep):
                 for key, value in values.items():
                     context.set(key, value)
 
-                # Also store hex versions for common use cases
+                # Auto-compute hex encodings only for text/password fields
+                # Skip for dropdowns and other fields that may contain hex values
+                text_field_ids = set()
+                for field in self.fields:
+                    if field.type in ("text", "password"):
+                        text_field_ids.add(field.id)
+
                 for key, value in values.items():
-                    if isinstance(value, str):
-                        # Store as hex-encoded string
+                    if isinstance(value, str) and key in text_field_ids:
+                        # Store as hex-encoded string (ASCII encoding)
                         context.set(f"{key}_hex", value.encode('utf-8').hex().upper())
-                        # Store length
+                        # Store length (in characters, which becomes bytes when ASCII encoded)
                         context.set(f"{key}_length", len(value))
 
                 return StepResult.ok(values)
@@ -120,6 +154,19 @@ class DialogStep(BaseStep):
         # Store values in context
         for key, value in values.items():
             context.set(key, value)
+
+        # Auto-compute hex encodings for text/password fields (same as regular execute)
+        text_field_ids = set()
+        for field in self.fields:
+            if field.type in ("text", "password"):
+                text_field_ids.add(field.id)
+
+        for key, value in values.items():
+            if isinstance(value, str) and key in text_field_ids:
+                # Store as hex-encoded string (ASCII encoding)
+                context.set(f"{key}_hex", value.encode('utf-8').hex().upper())
+                # Store length (in characters, which becomes bytes when ASCII encoded)
+                context.set(f"{key}_length", len(value))
 
         return StepResult.ok(values)
 

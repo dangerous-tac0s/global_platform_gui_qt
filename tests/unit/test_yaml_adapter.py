@@ -53,10 +53,12 @@ class TestYamlPluginAdapter:
         adapter = YamlPluginAdapter.from_file(path)
 
         caps = adapter.fetch_available_caps()
-        assert len(caps) == 1
-        # Should contain github:// URL
-        url = list(caps.values())[0]
-        assert "github://" in url or "DangerousThings" in url
+        # Multiple CAP files may match the asset pattern (default and large variants)
+        assert len(caps) >= 1
+        # All URLs should reference the ANSSI-FR repo (original SmartPGP source)
+        for name, url in caps.items():
+            assert "SmartPGP" in name
+            assert "github://" in url or "ANSSI-FR" in url or "github-af" in url
 
     def test_get_descriptions(self):
         """Test getting applet descriptions."""

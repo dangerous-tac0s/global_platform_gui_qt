@@ -121,11 +121,13 @@ class FormWidget(QWidget):
         """
         values = {}
         for widget in self._field_widgets:
-            # Include all fields that don't have show_when conditions,
-            # or visible conditional fields
-            field_def = widget.field_def
-            if field_def.show_when is None or widget.isVisible():
-                values[widget.getFieldId()] = widget.getValue()
+            # Include all fields that should be included based on show_when conditions
+            # Uses conditional manager to evaluate conditions directly, avoiding Qt
+            # visibility issues with tabbed dialogs (widgets in non-active tabs
+            # report isVisible()=False even when their show_when condition is met)
+            field_id = widget.getFieldId()
+            if self._conditional_manager.should_include_field(field_id):
+                values[field_id] = widget.getValue()
         return values
 
     def setValues(self, values: dict[str, Any]):
@@ -152,10 +154,11 @@ class FormWidget(QWidget):
             return False
 
         # Check each field that should be validated
+        # Uses conditional manager to evaluate show_when conditions directly,
+        # avoiding Qt visibility issues with tabbed dialogs
         for widget in self._field_widgets:
-            field_def = widget.field_def
-            # Validate fields without show_when, or visible conditional fields
-            if field_def.show_when is None or widget.isVisible():
+            field_id = widget.getFieldId()
+            if self._conditional_manager.should_include_field(field_id):
                 if not widget.isValid():
                     return False
 
@@ -223,11 +226,55 @@ class TabbedFormWidget(QWidget):
         self.validityChanged.emit(self.isValid())
 
     def getValues(self) -> dict[str, Any]:
-        """Get all field values from all tabs."""
-        values = {}
+        """
+        Get all field values from all tabs.
+
+        This handles cross-tab show_when conditions by:
+        1. First collecting ALL raw values from all forms
+        2. Then filtering based on show_when conditions evaluated against
+           the full value set (not limited to per-form visibility)
+        """
+        # First pass: collect all raw values unconditionally
+        all_values = {}
         for form in self._forms:
-            values.update(form.getValues())
-        return values
+            for widget in form._field_widgets:
+                all_values[widget.getFieldId()] = widget.getValue()
+
+        # Second pass: filter based on show_when conditions
+        # using the complete value set for cross-tab dependencies
+        filtered_values = {}
+        for form in self._forms:
+            for widget in form._field_widgets:
+                field_id = widget.getFieldId()
+                show_when = widget.field_def.show_when
+
+                if show_when is None:
+                    # No condition, always include
+                    filtered_values[field_id] = all_values[field_id]
+                else:
+                    # Evaluate show_when against all values (cross-tab safe)
+                    dep_field_id = show_when.field
+                    if dep_field_id in all_values:
+                        dep_value = all_values[dep_field_id]
+                        if self._evaluate_show_when(show_when, dep_value):
+                            filtered_values[field_id] = all_values[field_id]
+                    else:
+                        # Dependency not found, include by default
+                        filtered_values[field_id] = all_values[field_id]
+
+        return filtered_values
+
+    def _evaluate_show_when(self, show_when, dep_value: Any) -> bool:
+        """Evaluate a show_when condition against a dependency value."""
+        if show_when.equals is not None:
+            return dep_value == show_when.equals
+        if show_when.not_equals is not None:
+            return dep_value != show_when.not_equals
+        if show_when.in_list is not None:
+            return dep_value in show_when.in_list
+        if show_when.not_in_list is not None:
+            return dep_value not in show_when.not_in_list
+        return True  # No condition specified
 
     def setValues(self, values: dict[str, Any]):
         """Set field values across all tabs."""
@@ -235,8 +282,42 @@ class TabbedFormWidget(QWidget):
             form.setValues(values)
 
     def isValid(self) -> bool:
-        """Check if all forms in all tabs are valid."""
-        return all(form.isValid() for form in self._forms)
+        """
+        Check if all forms in all tabs are valid.
+
+        Handles cross-tab show_when conditions by only validating fields
+        whose show_when conditions are satisfied.
+        """
+        # First collect all values for cross-tab show_when evaluation
+        all_values = {}
+        for form in self._forms:
+            for widget in form._field_widgets:
+                all_values[widget.getFieldId()] = widget.getValue()
+
+        # Check each field that should be validated
+        for form in self._forms:
+            # Check cross-validation errors
+            if form._cross_validation_errors:
+                return False
+
+            for widget in form._field_widgets:
+                show_when = widget.field_def.show_when
+
+                should_validate = False
+                if show_when is None:
+                    should_validate = True
+                else:
+                    dep_field_id = show_when.field
+                    if dep_field_id in all_values:
+                        dep_value = all_values[dep_field_id]
+                        should_validate = self._evaluate_show_when(show_when, dep_value)
+                    else:
+                        should_validate = True  # Dependency not found, validate
+
+                if should_validate and not widget.isValid():
+                    return False
+
+        return True
 
     def getFieldWidget(self, field_id: str) -> Optional[FieldWidget]:
         """Get a field widget by ID from any tab."""

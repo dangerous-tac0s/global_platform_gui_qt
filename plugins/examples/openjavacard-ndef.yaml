@@ -1,0 +1,547 @@
+schema_version: '1.0'
+plugin:
+  name: openjavacard-ndef
+  description: NDEF Container applet for NFC tag emulation - full-featured version
+  version: 1.0.0
+  author: Community
+applet:
+  source:
+    type: github_release
+    owner: DangerousThings
+    repo: flexsecure-applets
+    asset_pattern: openjavacard-ndef-full.cap
+  metadata:
+    name: NDEF Container
+    aid: D2760000850101
+    storage:
+      persistent: 4096
+      transient: 256
+    description: |
+      NFC Data Exchange Format (NDEF) container applet.
+      Allows your implant to present data to NFC readers like a standard NFC tag.
+      Supports text records (with language), URI records, and custom permissions.
+    mutual_exclusion:
+    - openjavacard-ndef-tiny*.cap
+install_ui:
+  dialog:
+    title: NDEF Configuration
+    tabs:
+    - name: Size
+      fields:
+      - id: container_size
+        type: dropdown
+        label: Container Size
+        description: Maximum data storage capacity for NDEF records
+        default: '1000'
+        options:
+        - label: Automatic
+          value: ''
+        - label: 1 KB
+          value: '0400'
+        - label: 2 KB
+          value: 0800
+        - label: 4 KB
+          value: '1000'
+        - label: 8 KB
+          value: '2000'
+        - label: 16 KB
+          value: '4000'
+        - label: 32 KB
+          value: 7FFF
+    - name: Record
+      fields:
+      - id: record_type
+        type: dropdown
+        label: Record Type
+        description: Type of NDEF record to create
+        default: text
+        options:
+        - label: Text
+          value: text
+        - label: URI
+          value: uri
+        - label: None (empty container)
+          value: none
+      - id: text_language
+        type: dropdown
+        label: Language
+        description: Language code for the text record (ISO 639-1)
+        default: en
+        show_when:
+          field: record_type
+          equals: text
+        options:
+        - label: English
+          value: en
+        - label: Spanish (Español)
+          value: es
+        - label: French (Français)
+          value: fr
+        - label: German (Deutsch)
+          value: de
+        - label: Italian (Italiano)
+          value: it
+        - label: Portuguese (Português)
+          value: pt
+        - label: Dutch (Nederlands)
+          value: nl
+        - label: Russian (Русский)
+          value: ru
+        - label: Chinese (中文)
+          value: zh
+        - label: Japanese (日本語)
+          value: ja
+        - label: Korean (한국어)
+          value: ko
+        - label: Arabic (العربية)
+          value: ar
+      - id: text_content
+        type: text
+        label: Text Content
+        description: The text message to store
+        placeholder: Hello, World!
+        show_when:
+          field: record_type
+          equals: text
+      - id: uri_prefix
+        type: dropdown
+        label: URI Prefix
+        description: Common URI prefixes (saves space)
+        default: https://
+        show_when:
+          field: record_type
+          equals: uri
+        options:
+        - label: https://
+          value: https://
+        - label: http://
+          value: http://
+        - label: https://www.
+          value: https://www.
+        - label: http://www.
+          value: http://www.
+        - label: 'tel:'
+          value: 'tel:'
+        - label: 'mailto:'
+          value: 'mailto:'
+        - label: ftp://
+          value: ftp://
+        - label: (no prefix)
+          value: ''
+      - id: uri_value
+        type: text
+        label: URI
+        description: The URI (without prefix)
+        placeholder: example.com
+        show_when:
+          field: record_type
+          equals: uri
+    - name: Permissions
+      fields:
+      - id: read_permission
+        type: dropdown
+        label: Read Permission
+        description: Who can read the NDEF data
+        default: '00'
+        options:
+        - label: Open access
+          value: '00'
+        - label: No access
+          value: FF
+        - label: Contact only
+          value: F0
+      - id: write_permission
+        type: dropdown
+        label: Write Permission
+        description: Who can modify the NDEF data
+        default: '00'
+        options:
+        - label: Open access
+          value: '00'
+        - label: No access
+          value: FF
+        - label: Write once
+          value: F1
+        - label: Contact only
+          value: F0
+    - name: Raw
+      fields:
+      - id: raw_params
+        type: hex_editor
+        label: Raw Parameters
+        description: |
+          Edit installation parameters directly in hex.
+          Format: 80 XX [NDEF data] 81 02 [read] [write] 82 02 [size]
+        placeholder: '8102000082021000'
+parameters:
+  encoding: custom
+  create_aid: D2760000850101
+  builder: |
+    # Build installation parameters from field values
+    param_parts = []
+
+    # Get values
+    record_type = field_values.get("record_type", "none")
+    container_size = field_values.get("container_size", "")
+    read_perm = field_values.get("read_permission", "00")
+    write_perm = field_values.get("write_permission", "00")
+    raw_params = field_values.get("raw_params", "")
+
+    # If raw params are provided, use them directly
+    if raw_params and raw_params.strip():
+        # Clean up the hex string
+        result = "".join(c for c in raw_params if c in "0123456789ABCDEFabcdef").upper()
+    else:
+        # Build NDEF record data (tag 80)
+        if record_type == "text":
+            text_content = field_values.get("text_content", "")
+            language = field_values.get("text_language", "en")
+            if text_content:
+                # NDEF Text Record format:
+                # D1 01 LL T LL_lang lang text
+                # TNF=1 (NFC Forum well-known), SR=1, ME=1, MB=1
+                # Type = "T" (0x54)
+                lang_bytes = language.encode("ascii")
+                text_bytes = text_content.encode("utf-8")
+                status_byte = len(lang_bytes)  # UTF-8, length of language code
+                payload = bytes([status_byte]) + lang_bytes + text_bytes
+                payload_len = len(payload)
+
+                # Short record format: D1 01 [payload_len] 54 [payload]
+                ndef_record = bytes([0xD1, 0x01, payload_len, 0x54]) + payload
+                ndef_hex = ndef_record.hex().upper()
+                ndef_len = len(ndef_record)
+                param_parts.append(f"80{ndef_len:02X}{ndef_hex}")
+
+        elif record_type == "uri":
+            uri_prefix = field_values.get("uri_prefix", "")
+            uri_value = field_values.get("uri_value", "")
+            if uri_value:
+                full_uri = uri_prefix + uri_value
+
+                # URI prefix codes
+                prefix_codes = {
+                    "": 0x00,
+                    "http://www.": 0x01,
+                    "https://www.": 0x02,
+                    "http://": 0x03,
+                    "https://": 0x04,
+                    "tel:": 0x05,
+                    "mailto:": 0x06,
+                    "ftp://": 0x0D,
+                }
+
+                # Find best matching prefix
+                prefix_code = 0x00
+                uri_remainder = full_uri
+                for prefix, code in prefix_codes.items():
+                    if prefix and full_uri.startswith(prefix):
+                        prefix_code = code
+                        uri_remainder = full_uri[len(prefix):]
+                        break
+
+                # NDEF URI Record format:
+                # D1 01 LL 55 [prefix_code] [uri_remainder]
+                uri_bytes = uri_remainder.encode("utf-8")
+                payload = bytes([prefix_code]) + uri_bytes
+                payload_len = len(payload)
+
+                # Short record format: D1 01 [payload_len] 55 [payload]
+                ndef_record = bytes([0xD1, 0x01, payload_len, 0x55]) + payload
+                ndef_hex = ndef_record.hex().upper()
+                ndef_len = len(ndef_record)
+                param_parts.append(f"80{ndef_len:02X}{ndef_hex}")
+
+        # Add permissions (tag 81)
+        param_parts.append(f"8102{read_perm}{write_perm}")
+
+        # Add container size (tag 82) if not automatic
+        if container_size:
+            param_parts.append(f"8202{container_size}")
+
+        result = "".join(param_parts)
+management_ui:
+  state_readers:
+  - id: ndef_data_length
+    label: Data Used
+    select_file: E104
+    apdu: 00B0000002
+    parse:
+      type: hex
+      offset: 0
+      length: 2
+      format: int
+      display: '{value} bytes'
+  actions:
+  - id: write_text
+    label: Write Text Record
+    description: Write a text message to the NDEF container
+    workflow: write_text_flow
+  - id: write_url
+    label: Write URL Record
+    description: Write a URL to the NDEF container
+    workflow: write_url_flow
+  - id: read_ndef
+    label: Read Current Data
+    description: Read and display the current NDEF content
+    workflow: read_ndef_flow
+  - id: clear_data
+    label: Clear All Data
+    description: Erase all NDEF data from the container
+    confirm: Are you sure you want to clear all NDEF data? This cannot be undone.
+    apdu_sequence:
+    - command: SELECT_NDEF
+      apdu: 00A4000C02E104
+      description: Selecting NDEF file...
+    - command: CLEAR
+      apdu: 00D60000020000
+      description: Clearing data...
+workflows:
+  write_text_flow:
+    steps:
+    - id: get_input
+      name: Enter Text
+      type: dialog
+      fields:
+      - id: language
+        type: dropdown
+        label: Language
+        default: en
+        options:
+        - label: English
+          value: en
+        - label: Spanish (Español)
+          value: es
+        - label: French (Français)
+          value: fr
+        - label: German (Deutsch)
+          value: de
+        - label: Italian (Italiano)
+          value: it
+        - label: Portuguese (Português)
+          value: pt
+        - label: Dutch (Nederlands)
+          value: nl
+        - label: Russian (Русский)
+          value: ru
+        - label: Chinese (中文)
+          value: zh
+        - label: Japanese (日本語)
+          value: ja
+        - label: Korean (한국어)
+          value: ko
+      - id: text_content
+        type: text
+        label: Text Content
+        placeholder: Hello, World!
+        required: true
+    - id: encode_ndef
+      name: Encode NDEF
+      type: script
+      depends_on:
+      - get_input
+      script: |
+        import ndef
+
+        language = context.get("language", "en")
+        text_content = context.get("text_content", "")
+
+        # Create NDEF text record using the ndef library
+        record = ndef.TextRecord(text_content, language=language)
+        encoded = b"".join(ndef.message_encoder([record]))
+
+        # Format as length + hex data for UPDATE BINARY
+        data_len = len(encoded)
+        # NDEF file format: 2-byte length prefix + NDEF message
+        ndef_file_data = data_len.to_bytes(2, 'big') + encoded
+
+        context.set("ndef_file_hex", ndef_file_data.hex().upper())
+        context.set("write_length", len(ndef_file_data))
+        # Hex-encoded length for APDU Lc byte (1 byte = 2 hex chars)
+        context.set("write_length_hex", format(len(ndef_file_data), '02X'))
+    - id: select_ndef
+      name: Select NDEF File
+      type: apdu
+      depends_on:
+      - encode_ndef
+      apdu: 00A4000C02E104
+      description: Selecting NDEF file...
+    - id: write_ndef
+      name: Write NDEF Data
+      type: apdu
+      depends_on:
+      - select_ndef
+      apdu: 00D60000{write_length_hex}{ndef_file_hex}
+      description: Writing text record...
+  write_url_flow:
+    steps:
+    - id: get_input
+      name: Enter URL
+      type: dialog
+      fields:
+      - id: uri_prefix
+        type: dropdown
+        label: URI Prefix
+        default: https://
+        options:
+        - label: https://
+          value: https://
+        - label: http://
+          value: http://
+        - label: https://www.
+          value: https://www.
+        - label: http://www.
+          value: http://www.
+        - label: 'tel:'
+          value: 'tel:'
+        - label: 'mailto:'
+          value: 'mailto:'
+        - label: (no prefix)
+          value: ''
+      - id: uri_value
+        type: text
+        label: URL
+        placeholder: example.com
+        required: true
+    - id: encode_ndef
+      name: Encode NDEF
+      type: script
+      depends_on:
+      - get_input
+      script: |
+        import ndef
+
+        uri_prefix = context.get("uri_prefix", "")
+        uri_value = context.get("uri_value", "")
+        full_uri = uri_prefix + uri_value
+
+        # Create NDEF URI record using the ndef library
+        record = ndef.UriRecord(full_uri)
+        encoded = b"".join(ndef.message_encoder([record]))
+
+        # Format as length + hex data for UPDATE BINARY
+        data_len = len(encoded)
+        # NDEF file format: 2-byte length prefix + NDEF message
+        ndef_file_data = data_len.to_bytes(2, 'big') + encoded
+
+        context.set("ndef_file_hex", ndef_file_data.hex().upper())
+        context.set("write_length", len(ndef_file_data))
+        # Hex-encoded length for APDU Lc byte (1 byte = 2 hex chars)
+        context.set("write_length_hex", format(len(ndef_file_data), '02X'))
+    - id: select_ndef
+      name: Select NDEF File
+      type: apdu
+      depends_on:
+      - encode_ndef
+      apdu: 00A4000C02E104
+      description: Selecting NDEF file...
+    - id: write_ndef
+      name: Write NDEF Data
+      type: apdu
+      depends_on:
+      - select_ndef
+      apdu: 00D60000{write_length_hex}{ndef_file_hex}
+      description: Writing URL record...
+  read_ndef_flow:
+    steps:
+    - id: select_ndef
+      name: Select NDEF File
+      type: apdu
+      apdu: 00A4000C02E104
+      description: Selecting NDEF file...
+    - id: read_length
+      name: Read Data Length
+      type: apdu
+      depends_on:
+      - select_ndef
+      apdu: 00B0000002
+      description: Reading data length...
+    - id: parse_and_read
+      name: Read NDEF Data
+      type: script
+      depends_on:
+      - read_length
+      script: |
+        # Get the data from previous step (stored as {step_id}_data)
+        length_hex = context.get("read_length_data", "0000")
+        if len(length_hex) >= 4:
+            length = int(length_hex[:4], 16)
+        else:
+            length = 0
+
+        context.set("ndef_length", length)
+
+        if length == 0:
+            context.set("ndef_display", "Container is empty")
+        else:
+            # We'll need to read the actual data in the next step
+            context.set("read_offset", 2)
+            context.set("bytes_to_read", length)
+    - id: read_data
+      name: Read NDEF Content
+      type: apdu
+      depends_on:
+      - parse_and_read
+      apdu: 00B00002FA
+      description: Reading NDEF content...
+    - id: decode_ndef
+      name: Decode NDEF
+      type: script
+      depends_on:
+      - read_data
+      script: |
+        import ndef
+
+        # Get the data from previous step (stored as {step_id}_data)
+        data_hex = context.get("read_data_data", "")
+        ndef_length = context.get("ndef_length", 0)
+
+        if not data_hex or ndef_length == 0:
+            context.set("ndef_display", "Container is empty")
+        else:
+            try:
+                # Take only the NDEF data (length bytes worth)
+                ndef_data = bytes.fromhex(data_hex[:ndef_length * 2])
+
+                # Decode NDEF records
+                records = list(ndef.message_decoder(ndef_data))
+
+                display_lines = []
+                for i, record in enumerate(records):
+                    if isinstance(record, ndef.TextRecord):
+                        display_lines.append(f"Text ({record.language}): {record.text}")
+                    elif isinstance(record, ndef.UriRecord):
+                        display_lines.append(f"URI: {record.uri}")
+                    else:
+                        display_lines.append(f"Record {i+1}: {record.type} ({len(record.data)} bytes)")
+
+                context.set("ndef_display", "\n".join(display_lines) if display_lines else "No records found")
+            except Exception as e:
+                context.set("ndef_display", f"Error decoding: {str(e)}\nRaw: {data_hex[:100]}...")
+    - id: show_result
+      name: Display Content
+      type: dialog
+      depends_on:
+      - decode_ndef
+      fields:
+      - id: content_display
+        type: text
+        label: NDEF Content
+        readonly: true
+        default: '{ndef_display}'
+_selected_caps:
+- filename: openjavacard-ndef-full.cap
+  url: https://github.com/DangerousThings/flexsecure-applets/releases/download/v0.19.1/openjavacard-ndef-full.cap
+  metadata: &id001 !!python/object:src.views.dialogs.plugin_designer.utils.CapMetadata
+    aid: D276000085
+    package_name: ''
+    version: '2.1'
+    applet_aids:
+    - D2760000850101
+_extracted_metadata: *id001
+_github_repo_info:
+  name: flexsecure-applets
+  description: Collection of JavaCard applets for the FlexSecure, as well as build
+    and testing scripts, and documentation.
+  owner: DangerousThings
+  full_name: DangerousThings/flexsecure-applets

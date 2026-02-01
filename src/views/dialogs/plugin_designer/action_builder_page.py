@@ -735,6 +735,9 @@ class ActionBuilderPage(QWizardPage):
             # Deep copy to avoid modifying original data
             import copy
             self._actions = copy.deepcopy(actions)
+
+        # Always update list to ensure UI reflects current state
+        if self._actions:
             self._update_list()
 
     def _on_skip_changed(self, state):

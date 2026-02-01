@@ -50,10 +50,10 @@ class TestYamlPluginParser:
         assert schema.plugin.name == "smartpgp"
         assert schema.plugin.version == "1.0.0"
 
-        # Source
+        # Source (ANSSI-FR is the original SmartPGP source with on-card key generation)
         assert schema.applet.source.type == SourceType.GITHUB_RELEASE
-        assert schema.applet.source.owner == "DangerousThings"
-        assert schema.applet.source.repo == "flexsecure-applets"
+        assert schema.applet.source.owner == "ANSSI-FR"
+        assert schema.applet.source.repo == "SmartPGP"
 
         # Dynamic AID construction
         assert schema.has_dynamic_aid()
@@ -74,13 +74,13 @@ class TestYamlPluginParser:
 
         # Management UI
         assert schema.has_management_ui()
-        assert len(schema.management_ui.state_readers) == 3
-        assert len(schema.management_ui.actions) == 2
+        assert len(schema.management_ui.state_readers) == 8  # PIN retries, admin PIN retries, 3 keys, name, url, login
+        assert len(schema.management_ui.actions) == 7  # change PIN, 3 key generation, set name, url, login
 
         # Workflows
         assert "generate_sig_key" in schema.workflows
         workflow = schema.get_workflow("generate_sig_key")
-        assert len(workflow.steps) == 4
+        assert len(workflow.steps) == 7  # dialog + verify + set_algo + generate + compute_fp + upload_fp + upload_timestamp
         assert workflow.steps[0].type == StepType.DIALOG
         assert workflow.steps[1].type == StepType.APDU
 

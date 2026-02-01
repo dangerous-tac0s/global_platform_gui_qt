@@ -185,8 +185,11 @@ class MetadataPage(QWizardPage):
             if plugin_name:
                 self._name_edit.setText(plugin_name.replace("-", " ").title())
 
-        # Load AID
+        # Load AID - check for static aid first, then aid_construction.base
         aid = wizard.get_plugin_value("applet.metadata.aid", "")
+        if not aid:
+            # Fall back to aid_construction.base for dynamic AID plugins
+            aid = wizard.get_plugin_value("applet.metadata.aid_construction.base", "")
         if aid and not self._aid_edit.text():
             self._aid_edit.setText(aid)
             self._validate_aid(aid)

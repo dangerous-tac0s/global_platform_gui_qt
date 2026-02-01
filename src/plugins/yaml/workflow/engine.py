@@ -353,13 +353,18 @@ class WorkflowBuilder:
         """Create an ApduStep from definition."""
         from .steps.apdu_step import ApduStep
 
+        # Handle expected_sw - take first if it's a list
+        expect_sw = None
+        if step_def.expected_sw:
+            expect_sw = step_def.expected_sw[0] if isinstance(step_def.expected_sw, list) else step_def.expected_sw
+
         return ApduStep(
             step_id=step_def.id,
-            apdu_template=step_def.apdu or "",
+            apdu=step_def.apdu or "",
             name=step_def.name,
             description=step_def.description,
             depends_on=step_def.depends_on,
-            expected_sw=step_def.expected_sw,
+            expect_sw=expect_sw,
         )
 
     def _create_dialog_step(self, step_def: "WorkflowStep") -> BaseStep:

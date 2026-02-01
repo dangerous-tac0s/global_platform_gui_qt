@@ -745,6 +745,9 @@ class WorkflowBuilderPage(QWizardPage):
             # Deep copy to avoid modifying original data
             import copy
             self._workflows = copy.deepcopy(workflows)
+
+        # Always update list to ensure UI reflects current state
+        if self._workflows:
             self._update_list()
 
     def _on_skip_changed(self, state):

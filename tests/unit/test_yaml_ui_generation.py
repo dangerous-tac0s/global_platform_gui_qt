@@ -466,6 +466,122 @@ class TestHexLineEdit:
         assert len(line.getText()) <= 8  # 4 bytes = 8 hex chars
 
 
+class TestTabbedFormConditionalFields:
+    """Tests for conditional fields in tabbed forms - fixes tab visibility bug."""
+
+    def test_conditional_fields_in_inactive_tabs(self, qapp):
+        """
+        Test that conditional fields in non-active tabs are included in getValues()
+        when their show_when condition is met.
+
+        This tests the fix for the Qt visibility bug where widgets in non-active
+        tabs report isVisible()=False even when their show_when condition is satisfied.
+        """
+        # Tab 1: A dropdown that controls visibility
+        # Tab 2: A conditional field that depends on Tab 1's dropdown
+        tabs = [
+            TabDefinition(
+                name="Record Type",
+                fields=[
+                    FieldDefinition(
+                        id="record_type",
+                        type=FieldType.DROPDOWN,
+                        label="Record Type",
+                        options=[
+                            FieldOption(label="None", value="none"),
+                            FieldOption(label="URI", value="uri"),
+                            FieldOption(label="Text", value="text"),
+                        ],
+                        default="uri",  # Start with URI selected
+                    ),
+                ],
+            ),
+            TabDefinition(
+                name="URI Settings",
+                fields=[
+                    FieldDefinition(
+                        id="uri_prefix",
+                        type=FieldType.DROPDOWN,
+                        label="URI Prefix",
+                        options=[
+                            FieldOption(label="https://", value="https"),
+                            FieldOption(label="http://", value="http"),
+                        ],
+                        default="https",
+                        show_when=ShowWhen(field="record_type", equals="uri"),
+                    ),
+                    FieldDefinition(
+                        id="uri_value",
+                        type=FieldType.TEXT,
+                        label="URI",
+                        default="example.com",
+                        show_when=ShowWhen(field="record_type", equals="uri"),
+                    ),
+                ],
+            ),
+        ]
+
+        tabbed_form = TabbedFormWidget(tabs)
+
+        # Without fix: Tab 2 widgets return isVisible()=False because Tab 1 is active
+        # With fix: should_include_field() evaluates show_when conditions directly
+
+        # Get values while Tab 1 is active (default)
+        values = tabbed_form.getValues()
+
+        # The conditional fields in Tab 2 should be included because
+        # record_type="uri" satisfies their show_when condition
+        assert "uri_prefix" in values, "uri_prefix should be included when record_type=uri"
+        assert "uri_value" in values, "uri_value should be included when record_type=uri"
+        assert values["uri_prefix"] == "https"
+        assert values["uri_value"] == "example.com"
+
+    def test_conditional_fields_excluded_when_condition_not_met(self, qapp):
+        """
+        Test that conditional fields are excluded when their show_when
+        condition is NOT met, regardless of tab visibility.
+        """
+        tabs = [
+            TabDefinition(
+                name="Settings",
+                fields=[
+                    FieldDefinition(
+                        id="mode",
+                        type=FieldType.DROPDOWN,
+                        label="Mode",
+                        options=[
+                            FieldOption(label="Simple", value="simple"),
+                            FieldOption(label="Advanced", value="advanced"),
+                        ],
+                        default="simple",  # Simple mode - advanced options hidden
+                    ),
+                ],
+            ),
+            TabDefinition(
+                name="Advanced",
+                fields=[
+                    FieldDefinition(
+                        id="advanced_setting",
+                        type=FieldType.TEXT,
+                        label="Advanced Setting",
+                        default="value",
+                        show_when=ShowWhen(field="mode", equals="advanced"),
+                    ),
+                ],
+            ),
+        ]
+
+        tabbed_form = TabbedFormWidget(tabs)
+
+        # Get values - advanced_setting should NOT be included because mode=simple
+        values = tabbed_form.getValues()
+
+        assert "mode" in values
+        assert values["mode"] == "simple"
+        assert "advanced_setting" not in values, \
+            "advanced_setting should be excluded when mode=simple"
+
+
 class TestCrossFieldValidator:
     """Tests for CrossFieldValidator."""
 

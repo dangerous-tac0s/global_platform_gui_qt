@@ -51,6 +51,8 @@ class ParseType(str, Enum):
     TLV = "tlv"
     HEX = "hex"
     STRING = "string"
+    ASCII = "ascii"
+    OPENPGP_KEY = "openpgp_key"
 
 
 # ============================================================================
@@ -100,6 +102,8 @@ class FieldDefinition:
     transform: Optional[str] = None  # e.g., "uppercase", "lowercase"
     rows: int = 4  # For hex_editor/textarea
     description: Optional[str] = None  # Help text
+    width: float = 1.0  # Column width ratio (0.25, 0.33, 0.5, 1.0) for multi-column layouts
+    readonly: bool = False  # If True, field is display-only
 
 
 # ============================================================================
@@ -153,6 +157,8 @@ class StateParse:
     offset: int = 0
     length: Optional[int] = None
     tag: Optional[str] = None  # For TLV parsing
+    encoding: Optional[str] = None  # Value encoding, e.g., "ascii" to decode hex to text
+    format: Optional[str] = None  # Value format: "int" to convert hex to decimal
     display: Optional[str] = None  # Display template, e.g., "{value}/3 attempts"
     display_map: Optional[dict[str, str]] = None  # Value -> display text mapping
 
@@ -164,6 +170,7 @@ class StateReader:
     label: str
     apdu: str  # APDU to send
     parse: StateParse
+    select_file: Optional[str] = None  # File ID to SELECT before reading (e.g., "E104")
 
 
 @dataclass
@@ -197,6 +204,7 @@ class SourceDefinition:
     owner: Optional[str] = None  # GitHub owner
     repo: Optional[str] = None  # GitHub repo
     asset_pattern: Optional[str] = None  # Glob pattern for GitHub release assets
+    extract_pattern: Optional[str] = None  # Pattern for files to extract from ZIP
 
 
 @dataclass
@@ -283,6 +291,7 @@ class WorkflowStep:
 
     # For APDU steps
     apdu: Optional[str] = None
+    expected_sw: Optional[list[str]] = None  # Expected status words
 
     # For dialog steps
     fields: list[FieldDefinition] = field(default_factory=list)
