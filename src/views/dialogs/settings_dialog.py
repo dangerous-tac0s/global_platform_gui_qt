@@ -457,6 +457,9 @@ class SettingsDialog(QDialog):
     Main settings dialog with tabbed interface.
     """
 
+    edit_plugin_requested = pyqtSignal(str)  # yaml_path
+    refresh_plugins_requested = pyqtSignal()
+
     def __init__(
         self,
         plugin_map: Dict[str, Any],
@@ -487,6 +490,8 @@ class SettingsDialog(QDialog):
         disabled = self._config.get("disabled_plugins", [])
         self._plugins_tab = PluginsTab(self._plugin_map, disabled)
         self._plugins_tab.plugins_changed.connect(self._on_changes_made)
+        self._plugins_tab.edit_plugin.connect(self._on_edit_plugin)
+        self._plugins_tab.refresh_requested.connect(self._on_refresh_requested)
         tabs.addTab(self._plugins_tab, "Plugins")
 
         layout.addWidget(tabs)
@@ -519,6 +524,25 @@ class SettingsDialog(QDialog):
     def _save_settings(self):
         """Save settings to config."""
         self._config["disabled_plugins"] = self._plugins_tab.get_disabled_plugins()
+
+    def _on_edit_plugin(self, plugin_name: str, yaml_path: str):
+        """Handle edit plugin request - open wizard with loaded data."""
+        from src.views.dialogs.plugin_designer.wizard import PluginDesignerWizard
+
+        wizard = PluginDesignerWizard(self)
+        try:
+            wizard.load_from_file(yaml_path)
+            wizard.setWindowTitle(f"Edit Plugin: {plugin_name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load plugin:\n{e}")
+            return
+
+        if wizard.exec_() == QDialog.Accepted:
+            self.refresh_plugins_requested.emit()
+
+    def _on_refresh_requested(self):
+        """Handle request to refresh plugin list."""
+        self.refresh_plugins_requested.emit()
 
     def get_config(self) -> Dict[str, Any]:
         """Get the updated config."""
