@@ -4,6 +4,8 @@ Settings Dialog
 Provides application settings including plugin management.
 """
 
+import shutil
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -23,6 +25,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QMenu,
     QToolButton,
+    QFileDialog,
 )
 
 from src.plugins.yaml import set_debug_enabled, is_debug_enabled
@@ -221,6 +224,8 @@ class PluginsTab(QWidget):
     """Tab for managing plugins."""
 
     plugins_changed = pyqtSignal()
+    edit_plugin = pyqtSignal(str, str)  # plugin_name, yaml_path
+    refresh_requested = pyqtSignal()  # request parent to refresh plugins
 
     def __init__(
         self,
@@ -260,8 +265,18 @@ class PluginsTab(QWidget):
             plugin_info = self._get_plugin_info(plugin_name, plugin_cls_or_instance)
             enabled = plugin_name not in self._disabled_plugins
 
-            item = PluginItem(plugin_name, plugin_info, enabled)
+            item = PluginItem(
+                plugin_name,
+                plugin_info,
+                enabled,
+                is_yaml=plugin_info.get("is_yaml", False),
+                yaml_path=plugin_info.get("yaml_path"),
+            )
             item.toggled.connect(self._on_plugin_toggled)
+            item.edit_requested.connect(self._on_edit_plugin)
+            item.duplicate_requested.connect(self._on_duplicate_plugin)
+            item.export_requested.connect(self._on_export_plugin)
+            item.delete_requested.connect(self._on_delete_plugin)
             self._plugin_items[plugin_name] = item
             scroll_layout.addWidget(item)
 
@@ -285,21 +300,24 @@ class PluginsTab(QWidget):
 
     def _get_plugin_info(self, plugin_name: str, plugin_cls_or_instance) -> Dict[str, Any]:
         """Extract plugin info for display."""
-        info = {"type": "Python", "description": "", "caps": []}
+        info = {"type": "Python", "description": "", "caps": [], "is_yaml": False, "yaml_path": None}
 
         # Check if it's a YAML plugin (instance) or Python plugin (class)
         if isinstance(plugin_cls_or_instance, type):
             info["type"] = "Python"
+            info["is_yaml"] = False
             try:
                 instance = plugin_cls_or_instance()
                 if hasattr(instance, "fetch_available_caps"):
-                    # Don't actually fetch - just indicate it provides caps
                     info["caps"] = ["..."]
             except Exception:
                 pass
         else:
             # YAML plugin instance
             info["type"] = "YAML"
+            info["is_yaml"] = True
+            if hasattr(plugin_cls_or_instance, "_yaml_path"):
+                info["yaml_path"] = plugin_cls_or_instance._yaml_path
             if hasattr(plugin_cls_or_instance, "_schema"):
                 schema = plugin_cls_or_instance._schema
                 if hasattr(schema, "plugin") and hasattr(schema.plugin, "description"):
@@ -331,6 +349,107 @@ class PluginsTab(QWidget):
     def get_disabled_plugins(self) -> List[str]:
         """Get list of disabled plugin names."""
         return list(self._disabled_plugins)
+
+    def _on_edit_plugin(self, plugin_name: str):
+        """Handle edit request."""
+        item = self._plugin_items.get(plugin_name)
+        if item and item.yaml_path:
+            self.edit_plugin.emit(plugin_name, item.yaml_path)
+
+    def _on_duplicate_plugin(self, plugin_name: str):
+        """Handle duplicate request."""
+        item = self._plugin_items.get(plugin_name)
+        if not item or not item.yaml_path:
+            return
+
+        src_path = Path(item.yaml_path)
+        if not src_path.exists():
+            QMessageBox.warning(self, "Error", f"Plugin file not found: {src_path}")
+            return
+
+        # Generate unique name, preserving original extension
+        base_name = src_path.stem
+        ext = src_path.suffix  # Preserve .yaml or .yml
+        dest_dir = src_path.parent
+        counter = 1
+        dest_path = dest_dir / f"{base_name}_copy{ext}"
+        while dest_path.exists():
+            counter += 1
+            dest_path = dest_dir / f"{base_name}_copy{counter}{ext}"
+
+        try:
+            shutil.copy(src_path, dest_path)
+            # Disable original to prevent AID conflict
+            self._disabled_plugins.add(plugin_name)
+            if plugin_name in self._plugin_items:
+                self._plugin_items[plugin_name]._checkbox.setChecked(False)
+
+            QMessageBox.information(
+                self,
+                "Duplicated",
+                f"Plugin duplicated to:\n{dest_path.name}\n\nOriginal disabled to avoid AID conflict.",
+            )
+            self.plugins_changed.emit()
+            self.refresh_requested.emit()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to duplicate: {e}")
+
+    def _on_export_plugin(self, plugin_name: str):
+        """Handle export request."""
+        item = self._plugin_items.get(plugin_name)
+        if not item or not item.yaml_path:
+            return
+
+        src_path = Path(item.yaml_path)
+        if not src_path.exists():
+            QMessageBox.warning(self, "Error", f"Plugin file not found: {src_path}")
+            return
+
+        # Show save dialog
+        dest_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Plugin",
+            str(Path.home() / src_path.name),
+            "YAML Files (*.yaml *.yml);;All Files (*.*)",
+        )
+
+        if dest_path:
+            try:
+                shutil.copy(src_path, dest_path)
+                QMessageBox.information(self, "Exported", f"Plugin exported to:\n{dest_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to export: {e}")
+
+    def _on_delete_plugin(self, plugin_name: str):
+        """Handle delete request."""
+        item = self._plugin_items.get(plugin_name)
+        if not item or not item.yaml_path:
+            return
+
+        src_path = Path(item.yaml_path)
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Plugin",
+            f"Delete plugin '{plugin_name}'?\n\nFile: {src_path.name}\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                src_path.unlink(missing_ok=True)
+                # Remove from disabled list if present
+                self._disabled_plugins.discard(plugin_name)
+                # Remove widget from UI immediately
+                if plugin_name in self._plugin_items:
+                    widget = self._plugin_items.pop(plugin_name)
+                    widget.setParent(None)
+                    widget.deleteLater()
+                self.plugins_changed.emit()
+                self.refresh_requested.emit()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
 
 
 class SettingsDialog(QDialog):
