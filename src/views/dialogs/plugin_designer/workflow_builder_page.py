@@ -524,6 +524,10 @@ class WorkflowDefinitionDialog(QDialog):
         self._steps = self._workflow_data.get("steps", []).copy()
         self._update_steps_list()
 
+        # Auto-select first step to show preview
+        if self._steps:
+            self._steps_list.setCurrentRow(0)
+
     def _update_steps_list(self):
         """Update the steps list display."""
         self._steps_list.clear()

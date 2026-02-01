@@ -1,688 +1,654 @@
-schema_version: "1.0"
-
+schema_version: '1.0'
 plugin:
-  name: "smartpgp"
-  description: "SmartPGP OpenPGP card applet with dynamic AID construction"
-  version: "1.0.0"
-  author: "Community"
-
+  name: smartpgp
+  description: SmartPGP OpenPGP card applet with dynamic AID construction
+  version: 1.0.0
+  author: Community
 applet:
   source:
-    type: "github_release"
-    owner: "ANSSI-FR"
-    repo: "SmartPGP"
-    asset_pattern: "SmartPGP-*-javacard-3.0.4.zip"
-    extract_pattern: "*.cap"  # CAP file is inside the ZIP
+    type: github_release
+    owner: ANSSI-FR
+    repo: SmartPGP
+    asset_pattern: SmartPGP-*-javacard-3.0.4.zip
+    extract_pattern: '*.cap'
   metadata:
-    name: "SmartPGP"
+    name: SmartPGP
     aid_construction:
-      base: "D276000124010304"
+      base: D276000124010304
       segments:
-        - name: "manufacturer"
-          length: 2
-          source: "field:manufacturer_id"
-        - name: "serial"
-          length: 4
-          source: "field:serial_number"
-        - name: "reserved"
-          length: 2
-          default: "0000"
+      - name: manufacturer
+        length: 2
+        source: field:manufacturer_id
+      - name: serial
+        length: 4
+        source: field:serial_number
+      - name: reserved
+        length: 2
+        default: '0000'
     storage:
       persistent: 8192
       transient: 1024
     description: |
       SmartPGP is a JavaCard implementation of the OpenPGP card specifications.
       Supports OpenPGP 3.4 with RSA and ECC keys.
-
+    aid: D276000124010304
 install_ui:
   form:
     fields:
-      - id: "manufacturer_id"
-        type: "text"
-        label: "Manufacturer ID"
-        placeholder: "000A"
-        default: "000A"
-        required: true
-        validation:
-          pattern: "^[0-9A-Fa-f]{4}$"
-          message: "Must be exactly 4 hex characters"
-        transform: "uppercase"
-        description: "2-byte manufacturer identifier in hex"
-
-      - id: "serial_number"
-        type: "text"
-        label: "Serial Number"
-        placeholder: "00000001"
-        default: "00000001"
-        required: true
-        validation:
-          pattern: "^[0-9A-Fa-f]{8}$"
-          message: "Must be exactly 8 hex characters"
-        transform: "uppercase"
-        description: "4-byte serial number in hex"
-
+    - id: manufacturer_id
+      type: text
+      label: Manufacturer ID
+      placeholder: 000A
+      default: 000A
+      required: true
+      validation:
+        pattern: ^[0-9A-Fa-f]{4}$
+        message: Must be exactly 4 hex characters
+      transform: uppercase
+      description: 2-byte manufacturer identifier in hex
+    - id: serial_number
+      type: text
+      label: Serial Number
+      placeholder: '00000001'
+      default: '00000001'
+      required: true
+      validation:
+        pattern: ^[0-9A-Fa-f]{8}$
+        message: Must be exactly 8 hex characters
+      transform: uppercase
+      description: 4-byte serial number in hex
 management_ui:
   state_readers:
-    - id: "pin_retries"
-      label: "User PIN Retries"
-      apdu: "00CA00C400"
-      parse:
-        type: "byte"
-        offset: 4
-        display: "{value}/3 attempts remaining"
-
-    - id: "admin_pin_retries"
-      label: "Admin PIN Retries"
-      apdu: "00CA00C400"
-      parse:
-        type: "byte"
-        offset: 6
-        display: "{value}/3 attempts remaining"
-
-    # Key existence is checked by reading the public key directly
-    # GENERATE with P1=0x81 reads existing key, returns data if key exists
-    # or 6A88 (not found) if no key has been generated
-    - id: "signature_key"
-      label: "Signature Key"
-      apdu: "0047810002B60000"
-      parse:
-        type: "openpgp_key"
-        display_map:
-          "": "Not generated"
-
-    - id: "encryption_key"
-      label: "Encryption Key"
-      apdu: "0047810002B80000"
-      parse:
-        type: "openpgp_key"
-        display_map:
-          "": "Not generated"
-
-    - id: "authentication_key"
-      label: "Authentication Key"
-      apdu: "0047810002A40000"
-      parse:
-        type: "openpgp_key"
-        display_map:
-          "": "Not generated"
-
-    - id: "cardholder_name"
-      label: "Cardholder Name"
-      apdu: "00CA006500"  # Read DO 0065 (Cardholder Related Data)
-      parse:
-        type: "tlv"
-        tag: "5B"  # Extract Name tag from composite DO
-        encoding: "ascii"  # Decode hex to ASCII text
-        display_map:
-          "": "Not set"
-
-    - id: "public_url"
-      label: "Public Key URL"
-      apdu: "00CA5F5000"
-      parse:
-        type: "ascii"
-        display_map:
-          "": "Not set"
-
-    - id: "login_data"
-      label: "Login"
-      apdu: "00CA005E00"
-      parse:
-        type: "ascii"
-        display_map:
-          "": "Not set"
-
+  - id: pin_retries
+    label: User PIN Retries
+    apdu: 00CA00C400
+    parse:
+      type: byte
+      offset: 4
+      display: '{value}/3 attempts remaining'
+  - id: admin_pin_retries
+    label: Admin PIN Retries
+    apdu: 00CA00C400
+    parse:
+      type: byte
+      offset: 6
+      display: '{value}/3 attempts remaining'
+  - id: signature_key
+    label: Signature Key
+    apdu: 0047810002B60000
+    parse:
+      type: openpgp_key
+      display_map:
+        ? ''
+        : Not generated
+  - id: encryption_key
+    label: Encryption Key
+    apdu: 0047810002B80000
+    parse:
+      type: openpgp_key
+      display_map:
+        ? ''
+        : Not generated
+  - id: authentication_key
+    label: Authentication Key
+    apdu: 0047810002A40000
+    parse:
+      type: openpgp_key
+      display_map:
+        ? ''
+        : Not generated
+  - id: cardholder_name
+    label: Cardholder Name
+    apdu: 00CA006500
+    parse:
+      type: tlv
+      tag: 5B
+      encoding: ascii
+      display_map:
+        ? ''
+        : Not set
+  - id: public_url
+    label: Public Key URL
+    apdu: 00CA5F5000
+    parse:
+      type: ascii
+      display_map:
+        ? ''
+        : Not set
+  - id: login_data
+    label: Login
+    apdu: 00CA005E00
+    parse:
+      type: ascii
+      display_map:
+        ? ''
+        : Not set
   actions:
-    - id: "change_user_pin"
-      label: "Change User PIN"
-      description: "Change the user PIN (PIN1)"
-      dialog:
-        fields:
-          - id: "old_pin"
-            type: "password"
-            label: "Current PIN"
-            required: true
-            validation:
-              min_length: 6
-              max_length: 127
-              message: "PIN must be 6-127 characters"
-          - id: "new_pin"
-            type: "password"
-            label: "New PIN"
-            required: true
-            validation:
-              min_length: 6
-              max_length: 127
-          - id: "confirm_pin"
-            type: "password"
-            label: "Confirm New PIN"
-            required: true
-            validation:
-              equals_field: "new_pin"
-              message: "PINs must match"
-      apdu_sequence:
-        - command: "CHANGE_REFERENCE_DATA"
-          apdu: "00240081{old_pin_ascii_length:02X}{old_pin_ascii_hex}{new_pin_ascii_length:02X}{new_pin_ascii_hex}"
-          description: "Changing user PIN..."
-
-    - id: "generate_signature_key"
-      label: "Generate Signature Key"
-      description: "Generate a new signature key pair (Note: Some card variants like FlexSecure may not support on-card generation - use GnuPG to import keys instead)"
-      workflow: "generate_sig_key"
-
-    - id: "generate_encryption_key"
-      label: "Generate Encryption Key"
-      description: "Generate a new encryption/decryption key pair (Note: Some card variants like FlexSecure may not support on-card generation)"
-      workflow: "generate_enc_key"
-
-    - id: "generate_authentication_key"
-      label: "Generate Authentication Key"
-      description: "Generate a new authentication key pair (Note: Some card variants like FlexSecure may not support on-card generation)"
-      workflow: "generate_auth_key"
-
-    - id: "set_cardholder_name"
-      label: "Set Cardholder Name"
-      description: "Set the name displayed on the card"
-      workflow: "set_name_flow"
-
-    - id: "set_url"
-      label: "Set Public Key URL"
-      description: "Set URL where public key can be fetched"
-      workflow: "set_url_flow"
-
-    - id: "set_login"
-      label: "Set Login Data"
-      description: "Set login/username for authentication"
-      workflow: "set_login_flow"
-
+  - id: change_user_pin
+    label: Change User PIN
+    description: Change the user PIN (PIN1)
+    dialog:
+      fields:
+      - id: old_pin
+        type: password
+        label: Current PIN
+        required: true
+        validation:
+          min_length: 6
+          max_length: 127
+          message: PIN must be 6-127 characters
+      - id: new_pin
+        type: password
+        label: New PIN
+        required: true
+        validation:
+          min_length: 6
+          max_length: 127
+      - id: confirm_pin
+        type: password
+        label: Confirm New PIN
+        required: true
+        validation:
+          equals_field: new_pin
+          message: PINs must match
+    apdu_sequence:
+    - command: CHANGE_REFERENCE_DATA
+      apdu: 00240081{old_pin_ascii_length:02X}{old_pin_ascii_hex}{new_pin_ascii_length:02X}{new_pin_ascii_hex}
+      description: Changing user PIN...
+  - id: generate_signature_key
+    label: Generate Signature Key
+    description: 'Generate a new signature key pair (Note: Some card variants like
+      FlexSecure may not support on-card generation - use GnuPG to import keys instead)'
+    workflow: generate_sig_key
+  - id: generate_encryption_key
+    label: Generate Encryption Key
+    description: 'Generate a new encryption/decryption key pair (Note: Some card variants
+      like FlexSecure may not support on-card generation)'
+    workflow: generate_enc_key
+  - id: generate_authentication_key
+    label: Generate Authentication Key
+    description: 'Generate a new authentication key pair (Note: Some card variants
+      like FlexSecure may not support on-card generation)'
+    workflow: generate_auth_key
+  - id: set_cardholder_name
+    label: Set Cardholder Name
+    description: Set the name displayed on the card
+    workflow: set_name_flow
+  - id: set_url
+    label: Set Public Key URL
+    description: Set URL where public key can be fetched
+    workflow: set_url_flow
+  - id: set_login
+    label: Set Login Data
+    description: Set login/username for authentication
+    workflow: set_login_flow
 workflows:
   generate_sig_key:
     steps:
-      - id: "confirm"
-        name: "Confirm Key Generation"
-        type: "dialog"
-        fields:
-          - id: "key_algo"
-            type: "dropdown"
-            label: "Key Type"
-            options:
-              # Algorithm Attributes for OpenPGP card specification
-              # RSA-2048: 01 (RSA) + 0800 (2048) + 0011 (e bits) + 03 (format)
-              - label: "RSA 2048"
-                value: "010800001103"
-              # ECDSA P-256: 13 (ECDSA) + OID 1.2.840.10045.3.1.7
-              - label: "ECC P-256"
-                value: "132A8648CE3D030107FF"
-              # ECDSA P-384: 13 (ECDSA) + OID 1.3.132.0.34
-              - label: "ECC P-384"
-                value: "132B81040022FF"
-            default: "132A8648CE3D030107FF"
-          - id: "admin_pin"
-            type: "password"
-            label: "Admin PIN"
-            required: true
+    - id: confirm
+      name: Confirm Key Generation
+      type: dialog
+      fields:
+      - id: key_algo
+        type: dropdown
+        label: Key Type
+        options:
+        - label: RSA 2048
+          value: 010800001103
+        - label: ECC P-256
+          value: 132A8648CE3D030107FF
+        - label: ECC P-384
+          value: 132B81040022FF
+        default: 132A8648CE3D030107FF
+      - id: admin_pin
+        type: password
+        label: Admin PIN
+        required: true
+    - id: verify_admin
+      name: Verify Admin PIN
+      type: apdu
+      depends_on:
+      - confirm
+      apdu: 00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}
+      description: Verifying admin PIN...
+    - id: set_algorithm
+      name: Set Key Algorithm
+      type: apdu
+      depends_on:
+      - verify_admin
+      apdu: 00DA00C1{key_algo_length:02X}{key_algo}
+      description: Setting key algorithm...
+    - id: generate
+      name: Generate Key
+      type: apdu
+      depends_on:
+      - set_algorithm
+      apdu: 0047800002B600
+      description: Generating signature key pair...
+    - id: compute_fingerprint
+      name: Compute Fingerprint
+      type: script
+      depends_on:
+      - generate
+      description: Computing key fingerprint...
+      script: |
+        import hashlib
+        import struct
+        import time
 
-      - id: "verify_admin"
-        name: "Verify Admin PIN"
-        type: "apdu"
-        depends_on: ["confirm"]
-        apdu: "00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}"
-        description: "Verifying admin PIN..."
+        # Get the public key response from generate step
+        gen_result = context.get_step_result("generate")
+        if not gen_result or "data" not in gen_result:
+            raise Exception("No public key data from generate step")
 
-      - id: "set_algorithm"
-        name: "Set Key Algorithm"
-        type: "apdu"
-        depends_on: ["verify_admin"]
-        apdu: "00DA00C1{key_algo_length:02X}{key_algo}"
-        description: "Setting key algorithm..."
+        pub_key_hex = gen_result["data"]
+        pub_key = bytes.fromhex(pub_key_hex)
 
-      - id: "generate"
-        name: "Generate Key"
-        type: "apdu"
-        depends_on: ["set_algorithm"]
-        apdu: "0047800002B600"
-        description: "Generating signature key pair..."
+        # Get algorithm from context
+        key_algo = context.get("key_algo")
+        algo_byte = int(key_algo[:2], 16)  # First byte is algorithm ID
 
-      - id: "compute_fingerprint"
-        name: "Compute Fingerprint"
-        type: "script"
-        depends_on: ["generate"]
-        description: "Computing key fingerprint..."
-        script: |
-          import hashlib
-          import struct
-          import time
+        # Current timestamp (Unix time)
+        timestamp = int(time.time())
 
-          # Get the public key response from generate step
-          gen_result = context.get_step_result("generate")
-          if not gen_result or "data" not in gen_result:
-              raise Exception("No public key data from generate step")
+        # Build OpenPGP v4 public key packet for fingerprint
+        # Format: 0x99 | length (2 bytes) | version | timestamp | algo | key material
 
-          pub_key_hex = gen_result["data"]
-          pub_key = bytes.fromhex(pub_key_hex)
+        # Parse the 7F49 TLV to get the actual public key
+        # 7F49 contains: 86 (public key point for ECC) or 81/82 (n/e for RSA)
+        if pub_key_hex.startswith("7F49"):
+            # Skip tag and length
+            pos = 4
+            length = int(pub_key_hex[pos:pos+2], 16)
+            pos += 2
+            if length > 0x7F:
+                if length == 0x81:
+                    length = int(pub_key_hex[pos:pos+2], 16)
+                    pos += 2
+                elif length == 0x82:
+                    length = int(pub_key_hex[pos:pos+4], 16)
+                    pos += 4
+            key_material_hex = pub_key_hex[pos:]
+        else:
+            key_material_hex = pub_key_hex
 
-          # Get algorithm from context
-          key_algo = context.get("key_algo")
-          algo_byte = int(key_algo[:2], 16)  # First byte is algorithm ID
+        key_material = bytes.fromhex(key_material_hex)
 
-          # Current timestamp (Unix time)
-          timestamp = int(time.time())
+        # Build the public key packet content
+        if algo_byte == 0x13:  # ECDSA
+            # Get OID from algorithm attributes
+            oid_hex = key_algo[2:]  # Skip algorithm byte
+            oid = bytes.fromhex(oid_hex)
 
-          # Build OpenPGP v4 public key packet for fingerprint
-          # Format: 0x99 | length (2 bytes) | version | timestamp | algo | key material
+            # Parse 86 tag (public point)
+            if key_material_hex.startswith("86"):
+                point_len = int(key_material_hex[2:4], 16)
+                point = bytes.fromhex(key_material_hex[4:4+point_len*2])
+            else:
+                point = key_material
 
-          # Parse the 7F49 TLV to get the actual public key
-          # 7F49 contains: 86 (public key point for ECC) or 81/82 (n/e for RSA)
-          if pub_key_hex.startswith("7F49"):
-              # Skip tag and length
-              pos = 4
-              length = int(pub_key_hex[pos:pos+2], 16)
-              pos += 2
-              if length > 0x7F:
-                  if length == 0x81:
-                      length = int(pub_key_hex[pos:pos+2], 16)
-                      pos += 2
-                  elif length == 0x82:
-                      length = int(pub_key_hex[pos:pos+4], 16)
-                      pos += 4
-              key_material_hex = pub_key_hex[pos:]
-          else:
-              key_material_hex = pub_key_hex
+            # Build packet: version(1) + timestamp(4) + algo(1) + OID len(1) + OID + MPI
+            # MPI = bit count (2 bytes) + point
+            point_bits = len(point) * 8
+            mpi = struct.pack(">H", point_bits) + point
 
-          key_material = bytes.fromhex(key_material_hex)
+            packet_body = struct.pack(">BIBB", 4, timestamp, 19, len(oid)) + oid + mpi
 
-          # Build the public key packet content
-          if algo_byte == 0x13:  # ECDSA
-              # Get OID from algorithm attributes
-              oid_hex = key_algo[2:]  # Skip algorithm byte
-              oid = bytes.fromhex(oid_hex)
+        elif algo_byte == 0x01:  # RSA
+            # Parse modulus (81) and exponent (82) from key material
+            # For now, use the raw key material
+            packet_body = struct.pack(">BIB", 4, timestamp, 1) + key_material
 
-              # Parse 86 tag (public point)
-              if key_material_hex.startswith("86"):
-                  point_len = int(key_material_hex[2:4], 16)
-                  point = bytes.fromhex(key_material_hex[4:4+point_len*2])
-              else:
-                  point = key_material
+        else:
+            raise Exception(f"Unsupported algorithm: {algo_byte:02X}")
 
-              # Build packet: version(1) + timestamp(4) + algo(1) + OID len(1) + OID + MPI
-              # MPI = bit count (2 bytes) + point
-              point_bits = len(point) * 8
-              mpi = struct.pack(">H", point_bits) + point
+        # Fingerprint = SHA-1(0x99 | length | packet_body)
+        packet_len = len(packet_body)
+        fingerprint_input = bytes([0x99]) + struct.pack(">H", packet_len) + packet_body
+        fingerprint = hashlib.sha1(fingerprint_input).digest()
 
-              packet_body = struct.pack(">BIBB", 4, timestamp, 19, len(oid)) + oid + mpi
+        # Store fingerprint and timestamp for PUT DATA steps
+        context.set("fingerprint_hex", fingerprint.hex().upper())
+        context.set("timestamp_hex", struct.pack(">I", timestamp).hex().upper())
 
-          elif algo_byte == 0x01:  # RSA
-              # Parse modulus (81) and exponent (82) from key material
-              # For now, use the raw key material
-              packet_body = struct.pack(">BIB", 4, timestamp, 1) + key_material
-
-          else:
-              raise Exception(f"Unsupported algorithm: {algo_byte:02X}")
-
-          # Fingerprint = SHA-1(0x99 | length | packet_body)
-          packet_len = len(packet_body)
-          fingerprint_input = bytes([0x99]) + struct.pack(">H", packet_len) + packet_body
-          fingerprint = hashlib.sha1(fingerprint_input).digest()
-
-          # Store fingerprint and timestamp for PUT DATA steps
-          context.set("fingerprint_hex", fingerprint.hex().upper())
-          context.set("timestamp_hex", struct.pack(">I", timestamp).hex().upper())
-
-          result = f"Fingerprint: {fingerprint.hex().upper()}"
-
-      - id: "upload_fingerprint"
-        name: "Upload Fingerprint"
-        type: "apdu"
-        depends_on: ["compute_fingerprint"]
-        apdu: "00DA00C714{fingerprint_hex}"
-        description: "Uploading fingerprint to card..."
-
-      - id: "upload_timestamp"
-        name: "Upload Generation Date"
-        type: "apdu"
-        depends_on: ["upload_fingerprint"]
-        apdu: "00DA00CD04{timestamp_hex}"
-        description: "Setting key generation date..."
-
+        result = f"Fingerprint: {fingerprint.hex().upper()}"
+    - id: upload_fingerprint
+      name: Upload Fingerprint
+      type: apdu
+      depends_on:
+      - compute_fingerprint
+      apdu: 00DA00C714{fingerprint_hex}
+      description: Uploading fingerprint to card...
+    - id: upload_timestamp
+      name: Upload Generation Date
+      type: apdu
+      depends_on:
+      - upload_fingerprint
+      apdu: 00DA00CD04{timestamp_hex}
+      description: Setting key generation date...
   generate_enc_key:
     steps:
-      - id: "confirm"
-        name: "Confirm Key Generation"
-        type: "dialog"
-        fields:
-          - id: "key_algo"
-            type: "dropdown"
-            label: "Key Type"
-            options:
-              - label: "RSA 2048"
-                value: "010800001103"
-              # ECDH P-256: 12 (ECDH) + OID
-              - label: "ECC P-256"
-                value: "122A8648CE3D030107FF"
-              - label: "ECC P-384"
-                value: "122B81040022FF"
-            default: "122A8648CE3D030107FF"
-          - id: "admin_pin"
-            type: "password"
-            label: "Admin PIN"
-            required: true
+    - id: confirm
+      name: Confirm Key Generation
+      type: dialog
+      fields:
+      - id: key_algo
+        type: dropdown
+        label: Key Type
+        options:
+        - label: RSA 2048
+          value: 010800001103
+        - label: ECC P-256
+          value: 122A8648CE3D030107FF
+        - label: ECC P-384
+          value: 122B81040022FF
+        default: 122A8648CE3D030107FF
+      - id: admin_pin
+        type: password
+        label: Admin PIN
+        required: true
+    - id: verify_admin
+      name: Verify Admin PIN
+      type: apdu
+      depends_on:
+      - confirm
+      apdu: 00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}
+      description: Verifying admin PIN...
+    - id: set_algorithm
+      name: Set Key Algorithm
+      type: apdu
+      depends_on:
+      - verify_admin
+      apdu: 00DA00C2{key_algo_length:02X}{key_algo}
+      description: Setting encryption key algorithm...
+    - id: generate
+      name: Generate Key
+      type: apdu
+      depends_on:
+      - set_algorithm
+      apdu: 0047800002B800
+      description: Generating encryption key pair...
+    - id: compute_fingerprint
+      name: Compute Fingerprint
+      type: script
+      depends_on:
+      - generate
+      description: Computing key fingerprint...
+      script: |
+        import hashlib
+        import struct
+        import time
 
-      - id: "verify_admin"
-        name: "Verify Admin PIN"
-        type: "apdu"
-        depends_on: ["confirm"]
-        apdu: "00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}"
-        description: "Verifying admin PIN..."
+        gen_result = context.get_step_result("generate")
+        if not gen_result or "data" not in gen_result:
+            raise Exception("No public key data from generate step")
 
-      - id: "set_algorithm"
-        name: "Set Key Algorithm"
-        type: "apdu"
-        depends_on: ["verify_admin"]
-        apdu: "00DA00C2{key_algo_length:02X}{key_algo}"
-        description: "Setting encryption key algorithm..."
+        pub_key_hex = gen_result["data"]
+        key_algo = context.get("key_algo")
+        algo_byte = int(key_algo[:2], 16)
+        timestamp = int(time.time())
 
-      - id: "generate"
-        name: "Generate Key"
-        type: "apdu"
-        depends_on: ["set_algorithm"]
-        apdu: "0047800002B800"
-        description: "Generating encryption key pair..."
+        # Parse 7F49 TLV
+        if pub_key_hex.startswith("7F49"):
+            pos = 4
+            length = int(pub_key_hex[pos:pos+2], 16)
+            pos += 2
+            if length > 0x7F:
+                if length == 0x81:
+                    length = int(pub_key_hex[pos:pos+2], 16)
+                    pos += 2
+                elif length == 0x82:
+                    length = int(pub_key_hex[pos:pos+4], 16)
+                    pos += 4
+            key_material_hex = pub_key_hex[pos:]
+        else:
+            key_material_hex = pub_key_hex
 
-      - id: "compute_fingerprint"
-        name: "Compute Fingerprint"
-        type: "script"
-        depends_on: ["generate"]
-        description: "Computing key fingerprint..."
-        script: |
-          import hashlib
-          import struct
-          import time
+        key_material = bytes.fromhex(key_material_hex)
 
-          gen_result = context.get_step_result("generate")
-          if not gen_result or "data" not in gen_result:
-              raise Exception("No public key data from generate step")
+        if algo_byte == 0x12:  # ECDH
+            oid_hex = key_algo[2:]
+            oid = bytes.fromhex(oid_hex)
+            if key_material_hex.startswith("86"):
+                point_len = int(key_material_hex[2:4], 16)
+                point = bytes.fromhex(key_material_hex[4:4+point_len*2])
+            else:
+                point = key_material
+            point_bits = len(point) * 8
+            mpi = struct.pack(">H", point_bits) + point
+            packet_body = struct.pack(">BIBB", 4, timestamp, 18, len(oid)) + oid + mpi
+        elif algo_byte == 0x01:  # RSA
+            packet_body = struct.pack(">BIB", 4, timestamp, 1) + key_material
+        else:
+            raise Exception(f"Unsupported algorithm: {algo_byte:02X}")
 
-          pub_key_hex = gen_result["data"]
-          key_algo = context.get("key_algo")
-          algo_byte = int(key_algo[:2], 16)
-          timestamp = int(time.time())
+        packet_len = len(packet_body)
+        fingerprint_input = bytes([0x99]) + struct.pack(">H", packet_len) + packet_body
+        fingerprint = hashlib.sha1(fingerprint_input).digest()
 
-          # Parse 7F49 TLV
-          if pub_key_hex.startswith("7F49"):
-              pos = 4
-              length = int(pub_key_hex[pos:pos+2], 16)
-              pos += 2
-              if length > 0x7F:
-                  if length == 0x81:
-                      length = int(pub_key_hex[pos:pos+2], 16)
-                      pos += 2
-                  elif length == 0x82:
-                      length = int(pub_key_hex[pos:pos+4], 16)
-                      pos += 4
-              key_material_hex = pub_key_hex[pos:]
-          else:
-              key_material_hex = pub_key_hex
-
-          key_material = bytes.fromhex(key_material_hex)
-
-          if algo_byte == 0x12:  # ECDH
-              oid_hex = key_algo[2:]
-              oid = bytes.fromhex(oid_hex)
-              if key_material_hex.startswith("86"):
-                  point_len = int(key_material_hex[2:4], 16)
-                  point = bytes.fromhex(key_material_hex[4:4+point_len*2])
-              else:
-                  point = key_material
-              point_bits = len(point) * 8
-              mpi = struct.pack(">H", point_bits) + point
-              packet_body = struct.pack(">BIBB", 4, timestamp, 18, len(oid)) + oid + mpi
-          elif algo_byte == 0x01:  # RSA
-              packet_body = struct.pack(">BIB", 4, timestamp, 1) + key_material
-          else:
-              raise Exception(f"Unsupported algorithm: {algo_byte:02X}")
-
-          packet_len = len(packet_body)
-          fingerprint_input = bytes([0x99]) + struct.pack(">H", packet_len) + packet_body
-          fingerprint = hashlib.sha1(fingerprint_input).digest()
-
-          context.set("fingerprint_hex", fingerprint.hex().upper())
-          context.set("timestamp_hex", struct.pack(">I", timestamp).hex().upper())
-          result = f"Fingerprint: {fingerprint.hex().upper()}"
-
-      - id: "upload_fingerprint"
-        name: "Upload Fingerprint"
-        type: "apdu"
-        depends_on: ["compute_fingerprint"]
-        apdu: "00DA00C814{fingerprint_hex}"
-        description: "Uploading fingerprint to card..."
-
-      - id: "upload_timestamp"
-        name: "Upload Generation Date"
-        type: "apdu"
-        depends_on: ["upload_fingerprint"]
-        apdu: "00DA00CE04{timestamp_hex}"
-        description: "Setting key generation date..."
-
+        context.set("fingerprint_hex", fingerprint.hex().upper())
+        context.set("timestamp_hex", struct.pack(">I", timestamp).hex().upper())
+        result = f"Fingerprint: {fingerprint.hex().upper()}"
+    - id: upload_fingerprint
+      name: Upload Fingerprint
+      type: apdu
+      depends_on:
+      - compute_fingerprint
+      apdu: 00DA00C814{fingerprint_hex}
+      description: Uploading fingerprint to card...
+    - id: upload_timestamp
+      name: Upload Generation Date
+      type: apdu
+      depends_on:
+      - upload_fingerprint
+      apdu: 00DA00CE04{timestamp_hex}
+      description: Setting key generation date...
   generate_auth_key:
     steps:
-      - id: "confirm"
-        name: "Confirm Key Generation"
-        type: "dialog"
-        fields:
-          - id: "key_algo"
-            type: "dropdown"
-            label: "Key Type"
-            options:
-              - label: "RSA 2048"
-                value: "010800001103"
-              # Authentication uses ECDSA (same as signature)
-              - label: "ECC P-256"
-                value: "132A8648CE3D030107FF"
-              - label: "ECC P-384"
-                value: "132B81040022FF"
-            default: "132A8648CE3D030107FF"
-          - id: "admin_pin"
-            type: "password"
-            label: "Admin PIN"
-            required: true
+    - id: confirm
+      name: Confirm Key Generation
+      type: dialog
+      fields:
+      - id: key_algo
+        type: dropdown
+        label: Key Type
+        options:
+        - label: RSA 2048
+          value: 010800001103
+        - label: ECC P-256
+          value: 132A8648CE3D030107FF
+        - label: ECC P-384
+          value: 132B81040022FF
+        default: 132A8648CE3D030107FF
+      - id: admin_pin
+        type: password
+        label: Admin PIN
+        required: true
+    - id: verify_admin
+      name: Verify Admin PIN
+      type: apdu
+      depends_on:
+      - confirm
+      apdu: 00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}
+      description: Verifying admin PIN...
+    - id: set_algorithm
+      name: Set Key Algorithm
+      type: apdu
+      depends_on:
+      - verify_admin
+      apdu: 00DA00C3{key_algo_length:02X}{key_algo}
+      description: Setting authentication key algorithm...
+    - id: generate
+      name: Generate Key
+      type: apdu
+      depends_on:
+      - set_algorithm
+      apdu: 0047800002A400
+      description: Generating authentication key pair...
+    - id: compute_fingerprint
+      name: Compute Fingerprint
+      type: script
+      depends_on:
+      - generate
+      description: Computing key fingerprint...
+      script: |
+        import hashlib
+        import struct
+        import time
 
-      - id: "verify_admin"
-        name: "Verify Admin PIN"
-        type: "apdu"
-        depends_on: ["confirm"]
-        apdu: "00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}"
-        description: "Verifying admin PIN..."
+        gen_result = context.get_step_result("generate")
+        if not gen_result or "data" not in gen_result:
+            raise Exception("No public key data from generate step")
 
-      - id: "set_algorithm"
-        name: "Set Key Algorithm"
-        type: "apdu"
-        depends_on: ["verify_admin"]
-        apdu: "00DA00C3{key_algo_length:02X}{key_algo}"
-        description: "Setting authentication key algorithm..."
+        pub_key_hex = gen_result["data"]
+        key_algo = context.get("key_algo")
+        algo_byte = int(key_algo[:2], 16)
+        timestamp = int(time.time())
 
-      - id: "generate"
-        name: "Generate Key"
-        type: "apdu"
-        depends_on: ["set_algorithm"]
-        apdu: "0047800002A400"
-        description: "Generating authentication key pair..."
+        # Parse 7F49 TLV
+        if pub_key_hex.startswith("7F49"):
+            pos = 4
+            length = int(pub_key_hex[pos:pos+2], 16)
+            pos += 2
+            if length > 0x7F:
+                if length == 0x81:
+                    length = int(pub_key_hex[pos:pos+2], 16)
+                    pos += 2
+                elif length == 0x82:
+                    length = int(pub_key_hex[pos:pos+4], 16)
+                    pos += 4
+            key_material_hex = pub_key_hex[pos:]
+        else:
+            key_material_hex = pub_key_hex
 
-      - id: "compute_fingerprint"
-        name: "Compute Fingerprint"
-        type: "script"
-        depends_on: ["generate"]
-        description: "Computing key fingerprint..."
-        script: |
-          import hashlib
-          import struct
-          import time
+        key_material = bytes.fromhex(key_material_hex)
 
-          gen_result = context.get_step_result("generate")
-          if not gen_result or "data" not in gen_result:
-              raise Exception("No public key data from generate step")
+        if algo_byte == 0x13:  # ECDSA
+            oid_hex = key_algo[2:]
+            oid = bytes.fromhex(oid_hex)
+            if key_material_hex.startswith("86"):
+                point_len = int(key_material_hex[2:4], 16)
+                point = bytes.fromhex(key_material_hex[4:4+point_len*2])
+            else:
+                point = key_material
+            point_bits = len(point) * 8
+            mpi = struct.pack(">H", point_bits) + point
+            packet_body = struct.pack(">BIBB", 4, timestamp, 19, len(oid)) + oid + mpi
+        elif algo_byte == 0x01:  # RSA
+            packet_body = struct.pack(">BIB", 4, timestamp, 1) + key_material
+        else:
+            raise Exception(f"Unsupported algorithm: {algo_byte:02X}")
 
-          pub_key_hex = gen_result["data"]
-          key_algo = context.get("key_algo")
-          algo_byte = int(key_algo[:2], 16)
-          timestamp = int(time.time())
+        packet_len = len(packet_body)
+        fingerprint_input = bytes([0x99]) + struct.pack(">H", packet_len) + packet_body
+        fingerprint = hashlib.sha1(fingerprint_input).digest()
 
-          # Parse 7F49 TLV
-          if pub_key_hex.startswith("7F49"):
-              pos = 4
-              length = int(pub_key_hex[pos:pos+2], 16)
-              pos += 2
-              if length > 0x7F:
-                  if length == 0x81:
-                      length = int(pub_key_hex[pos:pos+2], 16)
-                      pos += 2
-                  elif length == 0x82:
-                      length = int(pub_key_hex[pos:pos+4], 16)
-                      pos += 4
-              key_material_hex = pub_key_hex[pos:]
-          else:
-              key_material_hex = pub_key_hex
-
-          key_material = bytes.fromhex(key_material_hex)
-
-          if algo_byte == 0x13:  # ECDSA
-              oid_hex = key_algo[2:]
-              oid = bytes.fromhex(oid_hex)
-              if key_material_hex.startswith("86"):
-                  point_len = int(key_material_hex[2:4], 16)
-                  point = bytes.fromhex(key_material_hex[4:4+point_len*2])
-              else:
-                  point = key_material
-              point_bits = len(point) * 8
-              mpi = struct.pack(">H", point_bits) + point
-              packet_body = struct.pack(">BIBB", 4, timestamp, 19, len(oid)) + oid + mpi
-          elif algo_byte == 0x01:  # RSA
-              packet_body = struct.pack(">BIB", 4, timestamp, 1) + key_material
-          else:
-              raise Exception(f"Unsupported algorithm: {algo_byte:02X}")
-
-          packet_len = len(packet_body)
-          fingerprint_input = bytes([0x99]) + struct.pack(">H", packet_len) + packet_body
-          fingerprint = hashlib.sha1(fingerprint_input).digest()
-
-          context.set("fingerprint_hex", fingerprint.hex().upper())
-          context.set("timestamp_hex", struct.pack(">I", timestamp).hex().upper())
-          result = f"Fingerprint: {fingerprint.hex().upper()}"
-
-      - id: "upload_fingerprint"
-        name: "Upload Fingerprint"
-        type: "apdu"
-        depends_on: ["compute_fingerprint"]
-        apdu: "00DA00C914{fingerprint_hex}"
-        description: "Uploading fingerprint to card..."
-
-      - id: "upload_timestamp"
-        name: "Upload Generation Date"
-        type: "apdu"
-        depends_on: ["upload_fingerprint"]
-        apdu: "00DA00CF04{timestamp_hex}"
-        description: "Setting key generation date..."
-
+        context.set("fingerprint_hex", fingerprint.hex().upper())
+        context.set("timestamp_hex", struct.pack(">I", timestamp).hex().upper())
+        result = f"Fingerprint: {fingerprint.hex().upper()}"
+    - id: upload_fingerprint
+      name: Upload Fingerprint
+      type: apdu
+      depends_on:
+      - compute_fingerprint
+      apdu: 00DA00C914{fingerprint_hex}
+      description: Uploading fingerprint to card...
+    - id: upload_timestamp
+      name: Upload Generation Date
+      type: apdu
+      depends_on:
+      - upload_fingerprint
+      apdu: 00DA00CF04{timestamp_hex}
+      description: Setting key generation date...
   set_name_flow:
     steps:
-      - id: "input"
-        name: "Enter Cardholder Name"
-        type: "dialog"
-        fields:
-          - id: "name"
-            type: "text"
-            label: "Cardholder Name"
-            placeholder: "Lastname<<Firstname"
-            description: "Format: LASTNAME<<FIRSTNAME (max 39 chars)"
-            required: true
-            validation:
-              max_length: 39
-          - id: "admin_pin"
-            type: "password"
-            label: "Admin PIN"
-            required: true
-
-      - id: "verify_admin"
-        name: "Verify Admin PIN"
-        type: "apdu"
-        depends_on: ["input"]
-        apdu: "00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}"
-        description: "Verifying admin PIN..."
-
-      - id: "set_name"
-        name: "Set Cardholder Name"
-        type: "apdu"
-        depends_on: ["verify_admin"]
-        apdu: "00DA005B{name_ascii_length:02X}{name_ascii_hex}"
-        description: "Setting cardholder name..."
-
+    - id: input
+      name: Enter Cardholder Name
+      type: dialog
+      fields:
+      - id: name
+        type: text
+        label: Cardholder Name
+        placeholder: Lastname<<Firstname
+        description: 'Format: LASTNAME<<FIRSTNAME (max 39 chars)'
+        required: true
+        validation:
+          max_length: 39
+      - id: admin_pin
+        type: password
+        label: Admin PIN
+        required: true
+    - id: verify_admin
+      name: Verify Admin PIN
+      type: apdu
+      depends_on:
+      - input
+      apdu: 00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}
+      description: Verifying admin PIN...
+    - id: set_name
+      name: Set Cardholder Name
+      type: apdu
+      depends_on:
+      - verify_admin
+      apdu: 00DA005B{name_ascii_length:02X}{name_ascii_hex}
+      description: Setting cardholder name...
   set_url_flow:
     steps:
-      - id: "input"
-        name: "Enter Public Key URL"
-        type: "dialog"
-        fields:
-          - id: "url"
-            type: "text"
-            label: "Public Key URL"
-            placeholder: "https://keys.openpgp.org/vks/v1/by-fingerprint/..."
-            description: "URL where your public key can be fetched"
-            required: true
-          - id: "admin_pin"
-            type: "password"
-            label: "Admin PIN"
-            required: true
-
-      - id: "verify_admin"
-        name: "Verify Admin PIN"
-        type: "apdu"
-        depends_on: ["input"]
-        apdu: "00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}"
-        description: "Verifying admin PIN..."
-
-      - id: "set_url"
-        name: "Set URL"
-        type: "apdu"
-        depends_on: ["verify_admin"]
-        apdu: "00DA5F50{url_ascii_length:02X}{url_ascii_hex}"
-        description: "Setting public key URL..."
-
+    - id: input
+      name: Enter Public Key URL
+      type: dialog
+      fields:
+      - id: url
+        type: text
+        label: Public Key URL
+        placeholder: https://keys.openpgp.org/vks/v1/by-fingerprint/...
+        description: URL where your public key can be fetched
+        required: true
+      - id: admin_pin
+        type: password
+        label: Admin PIN
+        required: true
+    - id: verify_admin
+      name: Verify Admin PIN
+      type: apdu
+      depends_on:
+      - input
+      apdu: 00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}
+      description: Verifying admin PIN...
+    - id: set_url
+      name: Set URL
+      type: apdu
+      depends_on:
+      - verify_admin
+      apdu: 00DA5F50{url_ascii_length:02X}{url_ascii_hex}
+      description: Setting public key URL...
   set_login_flow:
     steps:
-      - id: "input"
-        name: "Enter Login Data"
-        type: "dialog"
-        fields:
-          - id: "login"
-            type: "text"
-            label: "Login/Username"
-            placeholder: "user@example.com"
-            description: "Username for SSH/authentication"
-            required: true
-          - id: "admin_pin"
-            type: "password"
-            label: "Admin PIN"
-            required: true
-
-      - id: "verify_admin"
-        name: "Verify Admin PIN"
-        type: "apdu"
-        depends_on: ["input"]
-        apdu: "00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}"
-        description: "Verifying admin PIN..."
-
-      - id: "set_login"
-        name: "Set Login Data"
-        type: "apdu"
-        depends_on: ["verify_admin"]
-        apdu: "00DA005E{login_ascii_length:02X}{login_ascii_hex}"
-        description: "Setting login data..."
-
-hooks:
-  pre_install:
-    type: "script"
-    script: |
-      # Validate that required fields are set
-      if not field_values.get("manufacturer_id"):
-          raise ValidationError("Manufacturer ID is required")
-      if not field_values.get("serial_number"):
-          raise ValidationError("Serial Number is required")
+    - id: input
+      name: Enter Login Data
+      type: dialog
+      fields:
+      - id: login
+        type: text
+        label: Login/Username
+        placeholder: user@example.com
+        description: Username for SSH/authentication
+        required: true
+      - id: admin_pin
+        type: password
+        label: Admin PIN
+        required: true
+    - id: verify_admin
+      name: Verify Admin PIN
+      type: apdu
+      depends_on:
+      - input
+      apdu: 00200083{admin_pin_ascii_length:02X}{admin_pin_ascii_hex}
+      description: Verifying admin PIN...
+    - id: set_login
+      name: Set Login Data
+      type: apdu
+      depends_on:
+      - verify_admin
+      apdu: 00DA005E{login_ascii_length:02X}{login_ascii_hex}
+      description: Setting login data...

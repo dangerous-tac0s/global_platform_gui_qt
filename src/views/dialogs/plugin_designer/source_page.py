@@ -50,6 +50,7 @@ class SourceConfigPage(QWizardPage):
         self._github_repo_info = None
         # For multiple CAPs: {filename: {"url": str, "metadata": CapMetadata}}
         self._available_caps = {}
+        self._source_validated = False  # Track if source has been validated
         self._setup_ui()
 
     def _setup_ui(self):
@@ -149,6 +150,7 @@ class SourceConfigPage(QWizardPage):
         self._cap_list = QListWidget()
         self._cap_list.setMaximumHeight(120)
         self._cap_list.hide()
+        self._cap_list.itemChanged.connect(self._on_cap_selection_changed)
         github_layout.addWidget(self._cap_list)
 
         # Select all / Deselect all buttons
@@ -191,11 +193,66 @@ class SourceConfigPage(QWizardPage):
         # Connect radio buttons to stack
         self._type_button_group.buttonClicked.connect(self._on_type_changed)
 
+        # Connect text changes to update completion state
+        self._local_path_edit.textChanged.connect(self._on_input_changed)
+        self._http_url_edit.textChanged.connect(self._on_input_changed)
+        self._github_url_edit.textChanged.connect(self._on_input_changed)
+
         # Default to GitHub (most common use case)
         self._github_radio.setChecked(True)
         self._options_stack.setCurrentIndex(2)
 
         layout.addStretch()
+
+    def _on_input_changed(self):
+        """Handle input changes to update completion state."""
+        # Reset validation when main input changes (URL/path)
+        # This is connected to the path/URL fields, not pattern
+        self._source_validated = False
+        self._available_caps.clear()
+        # Hide CAP list if visible (for GitHub)
+        self._cap_list.hide()
+        self._cap_list_label.hide()
+        self._select_all_btn.hide()
+        self._deselect_all_btn.hide()
+        self._fetch_selected_btn.hide()
+        self.completeChanged.emit()
+
+    def _on_cap_selection_changed(self, item):
+        """Handle CAP file selection changes."""
+        self.completeChanged.emit()
+
+    def isComplete(self) -> bool:
+        """Check if the page has valid data to proceed."""
+        if self._local_radio.isChecked():
+            # Local: just need a path
+            return bool(self._local_path_edit.text().strip())
+
+        elif self._http_radio.isChecked():
+            # HTTP: just need a URL
+            return bool(self._http_url_edit.text().strip())
+
+        elif self._github_radio.isChecked():
+            # GitHub: need valid URL AND CAP files found/validated
+            url = self._github_url_edit.text().strip()
+            owner, repo, _ = parse_github_url(url)
+            if not owner or not repo:
+                return False
+            # Must have found CAP files (either single auto-fetched or list shown)
+            # and have at least one selected/available
+            if not self._available_caps:
+                return False
+            # If list is visible, check if at least one is selected
+            if self._cap_list.isVisible():
+                for i in range(self._cap_list.count()):
+                    item = self._cap_list.item(i)
+                    if item.checkState() == Qt.Checked:
+                        return True
+                return False
+            # Single CAP auto-fetched
+            return self._source_validated
+
+        return False
 
     def initializePage(self):
         """Load existing source config if editing."""
@@ -211,6 +268,9 @@ class SourceConfigPage(QWizardPage):
             path = wizard.get_plugin_value("applet.source.path", "")
             if path:
                 self._local_path_edit.setText(path)
+                # Mark as validated if path exists
+                self._source_validated = True
+                self.completeChanged.emit()
 
         elif source_type == "http":
             self._http_radio.setChecked(True)
@@ -218,6 +278,9 @@ class SourceConfigPage(QWizardPage):
             url = wizard.get_plugin_value("applet.source.url", "")
             if url:
                 self._http_url_edit.setText(url)
+                # Mark as validated if URL exists
+                self._source_validated = True
+                self.completeChanged.emit()
 
         elif source_type == "github_release":
             self._github_radio.setChecked(True)
@@ -230,11 +293,20 @@ class SourceConfigPage(QWizardPage):
             if pattern:
                 self._github_pattern_edit.setText(pattern)
 
+            # Auto-fetch CAP info for existing GitHub plugins
+            if owner and repo:
+                # Schedule auto-validation after UI settles
+                QTimer.singleShot(500, self._validate_github_source)
+
     def _on_type_changed(self, button):
         """Handle source type change."""
         button_id = self._type_button_group.id(button)
         self._options_stack.setCurrentIndex(button_id)
         self._status_label.clear()
+        # Reset validation when type changes
+        self._source_validated = False
+        self._available_caps.clear()
+        self.completeChanged.emit()
 
     def _on_github_url_changed(self, text: str):
         """Parse GitHub URL as user types."""
@@ -393,6 +465,8 @@ class SourceConfigPage(QWizardPage):
                 self._fetch_selected_btn.show()
                 self._status_label.setText(f"Found {len(assets)} CAP files. Select which to include.")
                 self._status_label.setStyleSheet("color: green;")
+                # Update completion state - CAP files found
+                self.completeChanged.emit()
 
         except Exception as e:
             self._status_label.setText(f"Unexpected error: {e}")
@@ -402,15 +476,21 @@ class SourceConfigPage(QWizardPage):
 
     def _select_all_caps(self):
         """Select all CAP files in the list."""
+        self._cap_list.blockSignals(True)  # Avoid multiple signals
         for i in range(self._cap_list.count()):
             item = self._cap_list.item(i)
             item.setCheckState(Qt.Checked)
+        self._cap_list.blockSignals(False)
+        self.completeChanged.emit()
 
     def _deselect_all_caps(self):
         """Deselect all CAP files in the list."""
+        self._cap_list.blockSignals(True)  # Avoid multiple signals
         for i in range(self._cap_list.count()):
             item = self._cap_list.item(i)
             item.setCheckState(Qt.Unchecked)
+        self._cap_list.blockSignals(False)
+        self.completeChanged.emit()
 
     def _fetch_selected_caps(self):
         """Download and parse metadata for selected CAP files."""
@@ -499,6 +579,10 @@ class SourceConfigPage(QWizardPage):
         self._status_label.setText("\n".join(lines))
         self._status_label.setStyleSheet("color: green;")
 
+        # Mark as validated and update completion state
+        self._source_validated = True
+        self.completeChanged.emit()
+
     def _show_metadata(self, metadata, filename: str = ""):
         """Display extracted metadata."""
         lines = []
@@ -516,6 +600,9 @@ class SourceConfigPage(QWizardPage):
         if lines:
             self._status_label.setText("Metadata extracted:\n" + "\n".join(lines))
             self._status_label.setStyleSheet("color: green;")
+            # Mark as validated and update completion state
+            self._source_validated = True
+            self.completeChanged.emit()
         else:
             self._status_label.setText("CAP file parsed but no metadata found.")
             self._status_label.setStyleSheet("")

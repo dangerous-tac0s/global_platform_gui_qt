@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=GlobalPlatform GUI
+Comment=Manage GlobalPlatform JavaCard applets
+Exec=gp_gui
+Icon=gp_gui
+Categories=Utility;Development;
+Terminal=false
+StartupNotify=true
+Keywords=smartcard;javacard;globalplatform;nfc;

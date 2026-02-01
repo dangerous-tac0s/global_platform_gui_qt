@@ -368,6 +368,144 @@ class GPService:
 
         return self._run_command(args, key=old_key, reader=reader)
 
+    def change_key_with_config(
+        self,
+        reader: str,
+        old_key: str,
+        new_config: "KeyConfiguration",
+        old_config: "KeyConfiguration | None" = None,
+    ) -> GPResult:
+        """
+        Change the card key(s) using a KeyConfiguration.
+
+        Supports both single-key (SCP02) and separate-key (SCP03) modes.
+
+        Args:
+            reader: Reader name
+            old_key: Current master key (for single-key auth)
+            new_config: New key configuration
+            old_config: Current config if using separate keys for auth
+
+        Returns:
+            GPResult with operation status
+        """
+        from ..models.key_config import KeyMode
+
+        # Build the command arguments
+        args = []
+
+        # Check if resetting to default
+        if (
+            new_config.mode == KeyMode.SINGLE
+            and new_config.static_key == DEFAULT_KEY
+        ):
+            args = ["--unlock-card"]
+        elif new_config.mode == KeyMode.SINGLE:
+            # Single key mode - use standard --lock
+            args = ["--lock", new_config.static_key]
+        else:
+            # Separate keys mode (SCP03) - use individual lock commands
+            args = [
+                "--lock-enc", new_config.enc_key,
+                "--lock-mac", new_config.mac_key,
+                "--lock-dek", new_config.dek_key,
+            ]
+
+        # Handle authentication
+        if old_config and old_config.mode == KeyMode.SEPARATE:
+            # Authenticate with separate keys
+            return self._run_command_with_separate_keys(
+                args,
+                enc_key=old_config.enc_key,
+                mac_key=old_config.mac_key,
+                dek_key=old_config.dek_key,
+                reader=reader,
+            )
+        else:
+            # Authenticate with single key
+            return self._run_command(args, key=old_key, reader=reader)
+
+    def _run_command_with_separate_keys(
+        self,
+        args: List[str],
+        enc_key: str,
+        mac_key: str,
+        dek_key: str,
+        reader: Optional[str] = None,
+        timeout: int = 60,
+    ) -> GPResult:
+        """
+        Run a GP command with separate ENC/MAC/DEK keys for authentication.
+
+        Args:
+            args: Command arguments
+            enc_key: ENC key (hex string)
+            mac_key: MAC key (hex string)
+            dek_key: DEK key (hex string)
+            reader: Reader name
+            timeout: Command timeout in seconds
+
+        Returns:
+            GPResult with command output
+        """
+        cmd = list(self._gp_cmd)
+
+        # Add separate keys for authentication
+        cmd.extend(["--key-enc", enc_key])
+        cmd.extend(["--key-mac", mac_key])
+        cmd.extend(["--key-dek", dek_key])
+
+        if reader:
+            cmd.extend(["-r", reader])
+
+        cmd.extend(args)
+
+        if self.verbose:
+            # Redact keys in log
+            log_cmd = list(cmd)
+            for flag in ["--key-enc", "--key-mac", "--key-dek"]:
+                if flag in log_cmd:
+                    idx = log_cmd.index(flag)
+                    if idx + 1 < len(log_cmd):
+                        log_cmd[idx + 1] = "***REDACTED***"
+            self._command_log.append(" ".join(log_cmd))
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=self.working_dir,
+            )
+            has_real_error = result.stderr and not all(
+                line.strip().startswith("[WARN]") or not line.strip()
+                for line in result.stderr.splitlines()
+            )
+            return GPResult(
+                success=result.returncode == 0 and not has_real_error,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                return_code=result.returncode,
+                command=cmd,
+            )
+        except subprocess.TimeoutExpired:
+            return GPResult(
+                success=False,
+                stdout="",
+                stderr="Command timed out",
+                return_code=-1,
+                command=cmd,
+            )
+        except Exception as e:
+            return GPResult(
+                success=False,
+                stdout="",
+                stderr=str(e),
+                return_code=-1,
+                command=cmd,
+            )
+
     def get_card_info(self, reader: str, key: str) -> GPResult:
         """
         Get card information.

@@ -529,19 +529,3 @@ workflows:
         label: NDEF Content
         readonly: true
         default: '{ndef_display}'
-_selected_caps:
-- filename: openjavacard-ndef-full.cap
-  url: https://github.com/DangerousThings/flexsecure-applets/releases/download/v0.19.1/openjavacard-ndef-full.cap
-  metadata: &id001 !!python/object:src.views.dialogs.plugin_designer.utils.CapMetadata
-    aid: D276000085
-    package_name: ''
-    version: '2.1'
-    applet_aids:
-    - D2760000850101
-_extracted_metadata: *id001
-_github_repo_info:
-  name: flexsecure-applets
-  description: Collection of JavaCard applets for the FlexSecure, as well as build
-    and testing scripts, and documentation.
-  owner: DangerousThings
-  full_name: DangerousThings/flexsecure-applets

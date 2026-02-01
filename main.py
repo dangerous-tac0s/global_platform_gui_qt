@@ -56,7 +56,7 @@ from src.events.event_bus import (
     ErrorEvent,
 )
 from src.views.widgets.status_bar import MessageQueue
-from src.views.dialogs import KeyPromptDialog, ComboDialog
+from src.views.dialogs import KeyPromptDialog, ComboDialog, ChangeKeyDialog
 from src.views.dialogs.plugin_designer import PluginDesignerWizard
 
 
@@ -307,8 +307,9 @@ def load_plugins():
     Note: All plugins are loaded. Use get_enabled_plugins() to filter by disabled list.
     """
     plugin_map = {}
-    repos_dir = os.path.join(os.path.dirname(__file__), "repos")  # included
-    plugins_dir = os.path.join(os.path.dirname(__file__), "plugins")
+    # Use resource_path for PyInstaller compatibility
+    repos_dir = resource_path("repos")
+    plugins_dir = resource_path("plugins")
     dir_to_name_map = {repos_dir: "repos", plugins_dir: "plugins"}
     print(plugins_dir)
     dirs = [repos_dir, plugins_dir]
@@ -349,7 +350,8 @@ def load_plugins():
     # Load YAML plugins
     try:
         from src.plugins.yaml.loader import YamlPluginLoader
-        base_dir = os.path.dirname(__file__)
+        # Use resource_path for PyInstaller compatibility
+        base_dir = resource_path(".")
         loader = YamlPluginLoader(base_dir)
         yaml_plugins = loader.discover()
 
@@ -649,6 +651,7 @@ class GPManagerApp(QMainWindow):
         self.nfc_thread.error_signal.connect(self.show_error_dialog)
         self.nfc_thread.title_bar_signal.connect(self.update_title_bar)
         self.nfc_thread.known_tags_update_signal.connect(self.update_known_tags)
+        self.nfc_thread.key_config_update_signal.connect(self.update_key_config)
 
         self.nfc_thread.show_key_prompt_signal.connect(self.prompt_for_key)
         self.nfc_thread.get_key_signal.connect(self.get_key)
@@ -1796,17 +1799,48 @@ class GPManagerApp(QMainWindow):
             )
 
     def change_tag_key(self):
-        dialog = HexInputDialog(
-            title="☠️ Change Your Key ☠️",
-            initial_value=self.nfc_thread.key,
-            fixed_byte_counts=[16, 24],
+        # Get current key configuration if available
+        current_config = self._get_key_config_for_card(self.nfc_thread.card_id)
+
+        dialog = ChangeKeyDialog(
+            current_key=self.nfc_thread.key or DEFAULT_KEY,
+            current_config=current_config,
             parent=self,
         )
-        dialog.exec_()
 
-        results = dialog.get_results()
-        if results:
-            self.nfc_thread.change_key(results)
+        if dialog.exec_() == QDialog.Accepted:
+            new_config = dialog.get_configuration()
+            if new_config:
+                self.nfc_thread.change_key_with_config(
+                    new_config=new_config,
+                    old_config=current_config,
+                )
+
+    def _get_key_config_for_card(self, card_id: str):
+        """Get the stored KeyConfiguration for a card if available."""
+        from src.models.key_config import KeyConfiguration
+
+        if not card_id or card_id == "__CONTACT_CARD__":
+            return None
+
+        if not self.secure_storage:
+            return None
+
+        tags = self.secure_storage.get("tags", {})
+        tag_data = tags.get(card_id)
+
+        if not tag_data:
+            return None
+
+        # Check for new key_config format
+        if "key_config" in tag_data:
+            return KeyConfiguration.from_dict(tag_data["key_config"])
+
+        # Fall back to legacy key format
+        if "key" in tag_data and tag_data["key"]:
+            return KeyConfiguration.from_legacy_key(tag_data["key"])
+
+        return None
 
     def quit_app(self):
 
@@ -1814,7 +1848,9 @@ class GPManagerApp(QMainWindow):
 
     def prompt_setup(self):
         def initialize_and_accept():
-            method = self.secure_storage_dialog.method_selector.currentText()
+            method_display = self.secure_storage_dialog.method_selector.currentText()
+            # Map display name to actual method
+            method = "gpg" if "gpg" in method_display.lower() else method_display
             context = {}
 
             if method == "gpg":
@@ -1960,6 +1996,33 @@ class GPManagerApp(QMainWindow):
                 )
 
         self.write_config()
+
+    def update_key_config(self, card_id: str, key_config):
+        """
+        Update the key configuration for a card.
+
+        Args:
+            card_id: Card identifier (CPLC hash or UID)
+            key_config: KeyConfiguration object
+        """
+        if not self.secure_storage:
+            return
+
+        tags = self.secure_storage.get("tags", {})
+
+        if card_id not in tags:
+            tags[card_id] = {"name": card_id}
+
+        # Store the new key_config format
+        tags[card_id]["key_config"] = key_config.to_dict()
+
+        # Also update legacy key field for backward compatibility
+        tags[card_id]["key"] = key_config.get_effective_key()
+
+        self.secure_storage["tags"] = tags
+        self.write_secure_storage()
+
+        self.message_queue.add_message(f"Updated key configuration for {tags[card_id].get('name', card_id)}")
 
     def query_known_tags(self, uid: str) -> bool:
         """

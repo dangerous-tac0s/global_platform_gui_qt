@@ -33,6 +33,7 @@ from ..events.event_bus import (
 
 if TYPE_CHECKING:
     from ..services.interfaces import IGPService
+    from ..models.key_config import KeyConfiguration
 
 # Default key for GlobalPlatform cards
 DEFAULT_KEY = "404142434445464748494A4B4C4D4E4F"
@@ -79,6 +80,7 @@ class NFCHandlerThread(QThread):
     show_key_prompt_signal = pyqtSignal(str)  # arg is card_id
     key_setter_signal = pyqtSignal(str)  # Key value to set
     known_tags_update_signal = pyqtSignal(str, str)  # card_id, key
+    key_config_update_signal = pyqtSignal(str, object)  # card_id, KeyConfiguration
     card_removed_signal = pyqtSignal()
     cplc_retrieved_signal = pyqtSignal(str, str)  # uid, cplc_hash
 
@@ -539,6 +541,101 @@ class NFCHandlerThread(QThread):
 
         if storage_key:
             self.known_tags_update_signal.emit(storage_key, new_key)
+
+    def change_key_with_config(
+        self,
+        new_config: "KeyConfiguration",
+        old_config: "KeyConfiguration | None" = None,
+    ):
+        """
+        Change the card's GlobalPlatform key(s) using a KeyConfiguration.
+
+        Supports both single-key and separate-key (SCP03) modes.
+
+        Args:
+            new_config: New key configuration
+            old_config: Current config if using separate keys for auth
+        """
+        from ..models.key_config import KeyMode
+
+        storage_key = self.card_id if self.card_id != "__CONTACT_CARD__" else None
+
+        if not self.selected_reader_name:
+            self._emit_error("No reader selected")
+            return
+
+        # Build the lock command based on new config
+        # Note: Use --lock even for default key, as --unlock-card fails on some cards
+        if new_config.mode == KeyMode.SINGLE:
+            lock_args = ["--lock", new_config.static_key]
+        else:
+            # Separate keys mode (SCP03) - include key version
+            lock_args = [
+                "--lock-enc", new_config.enc_key,
+                "--lock-mac", new_config.mac_key,
+                "--lock-dek", new_config.dek_key,
+                "--new-keyver", "1",  # Key version for new keys
+            ]
+
+        # Run the command with appropriate authentication
+        if old_config and old_config.mode == KeyMode.SEPARATE:
+            # Authenticate with separate keys - run directly
+            result = self._run_gp_with_separate_keys(
+                lock_args,
+                enc_key=old_config.enc_key,
+                mac_key=old_config.mac_key,
+                dek_key=old_config.dek_key,
+            )
+        else:
+            # Authenticate with single key - use run_gp
+            result = self.run_gp(lock_args, "Unable to change key:")
+
+        if result == -1 or result is None:
+            return
+
+        # Update local key reference
+        self.key = new_config.get_effective_key()
+
+        # Emit success
+        self._emit_operation_complete(True, "Key changed successfully")
+
+        # Notify storage to update
+        if storage_key:
+            # Emit both signals for compatibility
+            self.known_tags_update_signal.emit(storage_key, self.key)
+            self.key_config_update_signal.emit(storage_key, new_config)
+
+    def _run_gp_with_separate_keys(
+        self,
+        command: List[str],
+        enc_key: str,
+        mac_key: str,
+        dek_key: str,
+    ):
+        """Run a GP command with separate ENC/MAC/DEK keys for authentication."""
+        if not self.selected_reader_name:
+            return -1
+
+        result = subprocess.run(
+            [
+                *self.gp[os.name],
+                "--key-enc", enc_key,
+                "--key-mac", mac_key,
+                "--key-dek", dek_key,
+                "-r", self.selected_reader_name,
+                *command,
+            ],
+            capture_output=True,
+        )
+
+        stdout = result.stdout.decode()
+        stderr = result.stderr.decode()
+
+        if result.returncode == 0:
+            return stdout
+        else:
+            self._emit_error(f"Unable to change key: {stderr[:60]}")
+            return -1
 
     # =========================================================================
     # GlobalPlatform Commands
