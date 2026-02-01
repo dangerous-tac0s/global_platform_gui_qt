@@ -56,7 +56,7 @@ from src.events.event_bus import (
     ErrorEvent,
 )
 from src.views.widgets.status_bar import MessageQueue
-from src.views.dialogs import KeyPromptDialog, ComboDialog, ChangeKeyDialog
+from src.views.dialogs import KeyPromptDialog, ComboDialog, ChangeKeyDialog, ManageTagsDialog
 from src.views.dialogs.plugin_designer import PluginDesignerWizard
 
 
@@ -434,8 +434,8 @@ class GPManagerApp(QMainWindow):
         change_tag_key_action = QAction("⚠️ Change Key ⚠️", self)
         change_tag_key_action.triggered.connect(self.change_tag_key)
         manage_tags_action = QAction("Manage Known Tags", self)
-        manage_tags_action.triggered.connect(lambda x: print("Not completed yet."))
-        manage_tags_action.setEnabled(False)
+        manage_tags_action.triggered.connect(self.manage_tags)
+        self._manage_tags_action = manage_tags_action
 
         tag_menu.addAction(set_tag_name_action)
         tag_menu.addAction(set_tag_key_action)
@@ -523,6 +523,9 @@ class GPManagerApp(QMainWindow):
                         updated_config = True
                 if updated_config:
                     self.write_config()
+                # Enable "Manage Known Tags" action
+                if hasattr(self, '_manage_tags_action'):
+                    self._manage_tags_action.setEnabled(True)
         else:
             # You can opt out... But I'm gonna ask every time.
             self.prompt_setup()
@@ -938,6 +941,7 @@ class GPManagerApp(QMainWindow):
                 self._current_manage_btn.setEnabled(enabled)
 
     def handle_tag_menu(self):
+        # Tag menu is enabled when we have a key (card connected and authenticated)
         if self.nfc_thread.key:
             if self.secure_storage and not self.tag_menu.isEnabled():
                 self.tag_menu.setEnabled(True)
@@ -946,6 +950,11 @@ class GPManagerApp(QMainWindow):
         else:
             if self.secure_storage and self.tag_menu.isEnabled():
                 self.tag_menu.setEnabled(False)
+
+        # "Manage Known Tags" is always available when secure storage exists
+        # (doesn't require a card to be connected)
+        if hasattr(self, '_manage_tags_action'):
+            self._manage_tags_action.setEnabled(bool(self.secure_storage))
 
     def update_plugin_releases(self):
         self.message_queue.add_message("Fetching latest plugin releases...")
@@ -1841,6 +1850,32 @@ class GPManagerApp(QMainWindow):
             return KeyConfiguration.from_legacy_key(tag_data["key"])
 
         return None
+
+    def manage_tags(self):
+        """Open the manage tags dialog."""
+        if not self.secure_storage:
+            QMessageBox.information(
+                self,
+                "Secure Storage Required",
+                "Secure storage must be initialized to manage tags.\n\n"
+                "Please scan a card first to initialize storage.",
+            )
+            return
+
+        dialog = ManageTagsDialog(
+            secure_storage=self.secure_storage,
+            config=self.config,
+            parent=self,
+        )
+
+        if dialog.exec_() == QDialog.Accepted:
+            storage, config, modified = dialog.get_modified_data()
+            if modified:
+                self.secure_storage = storage
+                self.config = config
+                self.write_secure_storage()
+                self.write_config()
+                self.message_queue.add_message("Tag data updated.")
 
     def quit_app(self):
 

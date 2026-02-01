@@ -460,8 +460,26 @@ class SourceConfigPage(QWizardPage):
                 repo_info = fetch_github_repo_info(owner, repo)
                 self._github_repo_info = repo_info
             except GitHubError as e:
-                self._status_label.setText(str(e))
-                self._status_label.setStyleSheet("color: red;")
+                self._progress_bar.hide()
+                reply = QMessageBox.warning(
+                    self,
+                    "Network Error",
+                    f"Failed to fetch repository info:\n{e}\n\n"
+                    "Would you like to retry or continue without fetching?",
+                    QMessageBox.Retry | QMessageBox.Ignore | QMessageBox.Cancel,
+                    QMessageBox.Retry,
+                )
+                if reply == QMessageBox.Retry:
+                    QTimer.singleShot(100, lambda: self._do_validate_github(owner, repo, pattern, tag))
+                elif reply == QMessageBox.Ignore:
+                    # Allow continuing without repo info - user must manually configure
+                    self._status_label.setText(
+                        "Continuing without repository info. "
+                        "You'll need to manually enter all plugin details."
+                    )
+                    self._status_label.setStyleSheet("color: orange;")
+                    self._source_validated = True
+                    self.completeChanged.emit()
                 return
 
             # Check for plugin definition in repo or release
@@ -488,8 +506,26 @@ class SourceConfigPage(QWizardPage):
             try:
                 assets = fetch_github_release_assets(owner, repo, pattern, tag)
             except GitHubError as e:
-                self._status_label.setText(str(e))
-                self._status_label.setStyleSheet("color: red;")
+                self._progress_bar.hide()
+                reply = QMessageBox.warning(
+                    self,
+                    "Network Error",
+                    f"Failed to fetch release assets:\n{e}\n\n"
+                    "Would you like to retry or continue without CAP file info?",
+                    QMessageBox.Retry | QMessageBox.Ignore | QMessageBox.Cancel,
+                    QMessageBox.Retry,
+                )
+                if reply == QMessageBox.Retry:
+                    QTimer.singleShot(100, lambda: self._do_validate_github(owner, repo, pattern, tag))
+                elif reply == QMessageBox.Ignore:
+                    # Allow continuing - the plugin won't have CAP metadata but can be completed
+                    self._status_label.setText(
+                        "Continuing without CAP file info. "
+                        "You'll need to manually enter the AID and other metadata."
+                    )
+                    self._status_label.setStyleSheet("color: orange;")
+                    self._source_validated = True
+                    self.completeChanged.emit()
                 return
 
             # Store available CAPs

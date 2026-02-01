@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QInputDialog,
     QSplitter,
+    QMessageBox,
 )
 
 
@@ -689,6 +690,20 @@ class UIBuilderPage(QWizardPage):
         if new_use_tabs and not self._use_tabs:
             # Switching to tabbed mode - migrate flat fields to first tab
             if self._fields:
+                reply = QMessageBox.question(
+                    self,
+                    "Switch to Tabbed Mode",
+                    f"Your {len(self._fields)} field(s) will be moved to a 'General' tab.\n\n"
+                    "Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply != QMessageBox.Yes:
+                    # Revert checkbox without triggering signal
+                    self._use_tabs_check.blockSignals(True)
+                    self._use_tabs_check.setChecked(False)
+                    self._use_tabs_check.blockSignals(False)
+                    return
                 self._tabs = [{"name": "General", "fields": self._fields.copy()}]
                 self._fields = []
             elif not self._tabs:
@@ -696,6 +711,27 @@ class UIBuilderPage(QWizardPage):
 
         elif not new_use_tabs and self._use_tabs:
             # Switching to flat mode - flatten all tab fields
+            total_fields = sum(len(tab.get("fields", [])) for tab in self._tabs)
+            tab_names = [tab.get("name", "Tab") for tab in self._tabs if tab.get("fields")]
+
+            if len(self._tabs) > 1 and total_fields > 0:
+                reply = QMessageBox.warning(
+                    self,
+                    "Switch to Flat Mode",
+                    f"You have {len(self._tabs)} tabs with {total_fields} total field(s).\n\n"
+                    f"All fields from tabs ({', '.join(tab_names)}) will be merged into a single list. "
+                    "Tab organization will be lost.\n\n"
+                    "Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    # Revert checkbox without triggering signal
+                    self._use_tabs_check.blockSignals(True)
+                    self._use_tabs_check.setChecked(True)
+                    self._use_tabs_check.blockSignals(False)
+                    return
+
             all_fields = []
             for tab in self._tabs:
                 all_fields.extend(tab.get("fields", []))

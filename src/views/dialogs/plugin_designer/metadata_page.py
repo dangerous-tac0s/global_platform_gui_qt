@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QMessageBox,
 )
 
 
@@ -257,12 +258,59 @@ class MetadataPage(QWizardPage):
         if name:
             wizard.set_plugin_data("applet.metadata.name", name)
 
-        # AID
+        # AID validation with user feedback
         aid = self._aid_edit.text().replace(" ", "").upper()
-        if len(aid) >= 10 and len(aid) <= 32 and len(aid) % 2 == 0:
-            wizard.set_plugin_data("applet.metadata.aid", aid)
-        else:
-            return False  # Invalid AID
+        if not aid:
+            QMessageBox.warning(
+                self,
+                "AID Required",
+                "Please enter an Application Identifier (AID).\n\n"
+                "The AID must be 5-16 bytes (10-32 hex characters).",
+            )
+            self._aid_edit.setFocus()
+            return False
+
+        if not re.match(r'^[0-9A-F]*$', aid):
+            QMessageBox.warning(
+                self,
+                "Invalid AID",
+                "The AID contains invalid characters.\n\n"
+                "Only hexadecimal characters (0-9, A-F) are allowed.",
+            )
+            self._aid_edit.setFocus()
+            return False
+
+        if len(aid) % 2 != 0:
+            QMessageBox.warning(
+                self,
+                "Invalid AID",
+                f"The AID has an odd number of characters ({len(aid)}).\n\n"
+                "Each byte requires two hex characters.",
+            )
+            self._aid_edit.setFocus()
+            return False
+
+        if len(aid) < 10:
+            QMessageBox.warning(
+                self,
+                "AID Too Short",
+                f"The AID is only {len(aid)//2} bytes.\n\n"
+                "The minimum AID length is 5 bytes (10 hex characters).",
+            )
+            self._aid_edit.setFocus()
+            return False
+
+        if len(aid) > 32:
+            QMessageBox.warning(
+                self,
+                "AID Too Long",
+                f"The AID is {len(aid)//2} bytes.\n\n"
+                "The maximum AID length is 16 bytes (32 hex characters).",
+            )
+            self._aid_edit.setFocus()
+            return False
+
+        wizard.set_plugin_data("applet.metadata.aid", aid)
 
         # Storage
         persistent = self._persistent_spin.value()
