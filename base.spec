@@ -66,7 +66,6 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=platform_datas + [
-        ('repos', 'repos'),
         ('plugins', 'plugins'),
         ('favicon.ico', '.'),
     ],
@@ -76,7 +75,6 @@ a = Analysis(
         'babel',
         'babel.numbers',
         'main',
-        'applet_override_base',
         'smartcard',
         'smartcard.System',
         'smartcard.CardConnection',

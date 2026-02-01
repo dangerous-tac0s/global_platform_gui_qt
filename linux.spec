@@ -39,7 +39,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ('gp.jar', '.'),                    # Java-based GP tool for Linux
-        ('repos', 'repos'),                  # Built-in applet repos
         ('plugins', 'plugins'),              # YAML plugin definitions
         ('favicon.ico', '.'),                # Icon (also used for window)
     ],
@@ -49,7 +48,6 @@ a = Analysis(
         'babel',
         'babel.numbers',
         'main',
-        'applet_override_base',
         'smartcard',
         'smartcard.System',
         'smartcard.CardConnection',

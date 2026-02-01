@@ -40,7 +40,6 @@ a = Analysis(
     datas=[
         ('gp.exe', '.'),                     # Native Windows GP executable
         ('gp.jar', '.'),                     # Fallback JAR (if Java available)
-        ('repos', 'repos'),                  # Built-in applet repos
         ('plugins', 'plugins'),              # YAML plugin definitions
         ('favicon.ico', '.'),                # Application icon
     ],
@@ -50,7 +49,6 @@ a = Analysis(
         'babel',
         'babel.numbers',
         'main',
-        'applet_override_base',
         'smartcard',
         'smartcard.System',
         'smartcard.CardConnection',
