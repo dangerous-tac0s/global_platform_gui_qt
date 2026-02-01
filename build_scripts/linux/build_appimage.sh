@@ -71,10 +71,51 @@ chmod +x "$APPDIR/AppRun"
 
 # Build AppImage
 echo "Building AppImage..."
-ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$BUILD_DIR/GlobalPlatformGUI-x86_64.AppImage"
+APPIMAGE_PATH="$BUILD_DIR/GlobalPlatformGUI-x86_64.AppImage"
+ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$APPIMAGE_PATH"
+
+# GPG Signing (optional - requires GPG key)
+SIGN_GPG="${SIGN_GPG:-false}"
+GPG_KEY="${GPG_KEY:-}"
+
+if [ "$SIGN_GPG" = "true" ]; then
+    echo ""
+    echo "=== GPG Signing ==="
+    if command -v gpg &> /dev/null; then
+        GPG_ARGS="--detach-sign --armor"
+        if [ -n "$GPG_KEY" ]; then
+            GPG_ARGS="$GPG_ARGS --default-key $GPG_KEY"
+        fi
+
+        echo "Creating GPG signature..."
+        gpg $GPG_ARGS "$APPIMAGE_PATH"
+
+        if [ -f "${APPIMAGE_PATH}.asc" ]; then
+            echo "GPG signature created: ${APPIMAGE_PATH}.asc"
+        else
+            echo "Warning: GPG signing may have failed"
+        fi
+    else
+        echo "Warning: gpg not found, skipping GPG signing"
+    fi
+fi
+
+# Generate checksums
+echo ""
+echo "=== Generating Checksums ==="
+cd "$BUILD_DIR"
+sha256sum "$(basename "$APPIMAGE_PATH")" > "$(basename "$APPIMAGE_PATH").sha256"
+echo "SHA256: $(cat "$(basename "$APPIMAGE_PATH").sha256")"
 
 echo ""
 echo "=== Build Complete ==="
-echo "AppImage: $BUILD_DIR/GlobalPlatformGUI-x86_64.AppImage"
+echo "AppImage: $APPIMAGE_PATH"
+echo "Checksum: ${APPIMAGE_PATH}.sha256"
+if [ -f "${APPIMAGE_PATH}.asc" ]; then
+    echo "GPG Sig:  ${APPIMAGE_PATH}.asc"
+fi
 echo ""
-echo "To test: $BUILD_DIR/GlobalPlatformGUI-x86_64.AppImage"
+echo "To test: $APPIMAGE_PATH"
+echo ""
+echo "To build with GPG signing:"
+echo "  SIGN_GPG=true GPG_KEY=your-key-id ./build_appimage.sh"

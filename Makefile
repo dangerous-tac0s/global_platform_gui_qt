@@ -1,15 +1,23 @@
 # GlobalPlatform GUI - Cross-platform build system
 # Usage:
-#   make linux      - Build Linux AppImage
-#   make windows    - Build Windows executable (on Windows)
-#   make macos      - Build macOS .app bundle (on macOS)
-#   make all        - Build for current platform
-#   make clean      - Clean build artifacts
-#   make test       - Run tests
-#   make dev        - Install development dependencies
+#   make linux          - Build Linux AppImage
+#   make linux-signed   - Build Linux AppImage with GPG signature
+#   make windows        - Build Windows executable (on Windows)
+#   make macos          - Build macOS .app bundle (on macOS)
+#   make macos-signed   - Build macOS with GPG signature
+#   make all            - Build for current platform
+#   make clean          - Clean build artifacts
+#   make test           - Run tests
+#   make dev            - Install development dependencies
+#
+# Signing options (set via environment):
+#   GPG_KEY           - GPG key ID for signing (e.g., GPG_KEY=4F08C3EF8040B5C7)
+#   CODESIGN_IDENTITY - macOS Developer ID (e.g., "Developer ID Application: Name (TEAMID)")
+#   SIGNTOOL_CERT     - Windows certificate path
+#   SIGNTOOL_PASSWORD - Windows certificate password
 
 SHELL := /bin/bash
-.PHONY: all linux windows macos clean test dev help
+.PHONY: all linux linux-signed windows macos macos-signed clean test dev help sign-verify
 
 # Detect OS
 UNAME_S := $(shell uname -s)
@@ -29,14 +37,24 @@ all: $(PLATFORM)
 help:
 	@echo "GlobalPlatform GUI Build System"
 	@echo ""
-	@echo "Targets:"
-	@echo "  make linux     - Build Linux AppImage"
-	@echo "  make windows   - Build Windows executable"
-	@echo "  make macos     - Build macOS .app bundle"
-	@echo "  make all       - Build for current platform ($(PLATFORM))"
-	@echo "  make clean     - Clean build artifacts"
-	@echo "  make test      - Run tests"
-	@echo "  make dev       - Install development dependencies"
+	@echo "Build Targets:"
+	@echo "  make linux        - Build Linux AppImage"
+	@echo "  make linux-signed - Build Linux AppImage with GPG signature"
+	@echo "  make windows      - Build Windows executable"
+	@echo "  make macos        - Build macOS .app bundle + DMG"
+	@echo "  make macos-signed - Build macOS with GPG signature"
+	@echo "  make all          - Build for current platform ($(PLATFORM))"
+	@echo ""
+	@echo "Other Targets:"
+	@echo "  make clean        - Clean build artifacts"
+	@echo "  make test         - Run tests"
+	@echo "  make dev          - Install development dependencies"
+	@echo "  make sign-verify  - Verify GPG signatures in dist/"
+	@echo ""
+	@echo "Signing Options (environment variables):"
+	@echo "  GPG_KEY=<key-id>              - GPG key for signing"
+	@echo "  CODESIGN_IDENTITY=<identity>  - macOS Developer ID"
+	@echo "  SIGNTOOL_CERT=<path>          - Windows certificate file"
 	@echo ""
 	@echo "Current platform: $(PLATFORM)"
 
@@ -46,11 +64,23 @@ linux:
 	chmod +x build_scripts/linux/build_appimage.sh
 	./build_scripts/linux/build_appimage.sh
 
+# Linux AppImage build with GPG signing
+linux-signed:
+	@echo "Building Linux AppImage with GPG signature..."
+	chmod +x build_scripts/linux/build_appimage.sh
+	SIGN_GPG=true GPG_KEY=$(GPG_KEY) ./build_scripts/linux/build_appimage.sh
+
 # macOS .app bundle build
 macos:
 	@echo "Building macOS .app bundle..."
 	chmod +x build_scripts/macos/build_macos.sh build_scripts/macos/create_icns.sh
 	./build_scripts/macos/build_macos.sh
+
+# macOS build with GPG signing (and optional Apple code signing)
+macos-signed:
+	@echo "Building macOS .app bundle with signing..."
+	chmod +x build_scripts/macos/build_macos.sh build_scripts/macos/create_icns.sh
+	SIGN_GPG=true GPG_KEY=$(GPG_KEY) CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" ./build_scripts/macos/build_macos.sh
 
 # Windows executable build
 windows:
@@ -100,3 +130,22 @@ format:
 # Check code style
 lint:
 	black --check .
+
+# Verify GPG signatures
+sign-verify:
+	@echo "Verifying GPG signatures in dist/..."
+	@for sig in dist/*.asc; do \
+		if [ -f "$$sig" ]; then \
+			echo "Verifying: $$sig"; \
+			gpg --verify "$$sig" && echo "  ✓ Valid" || echo "  ✗ Invalid"; \
+		fi \
+	done
+	@echo ""
+	@echo "Verifying checksums..."
+	@for sum in dist/*.sha256; do \
+		if [ -f "$$sum" ]; then \
+			echo "Checking: $$sum"; \
+			cd dist && sha256sum -c "$$(basename $$sum)" && echo "  ✓ Valid" || echo "  ✗ Invalid"; \
+			cd ..; \
+		fi \
+	done
