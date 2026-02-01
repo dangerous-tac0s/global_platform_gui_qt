@@ -113,7 +113,7 @@ class ManageTagsDialog(QDialog):
             self._table.setItem(row, 0, id_item)
 
             # UID (read-only) - shows original UID if card_id is CPLC-based
-            uid = tag_data.get("uid_reference", "")
+            uid = tag_data.get("uid", "")
             uid_item = QTableWidgetItem(uid if uid else "-")
             uid_item.setFlags(uid_item.flags() & ~Qt.ItemIsEditable)
             if uid:
