@@ -320,7 +320,6 @@ class PluginItem(QFrame):
                 QToolButton {
                     border: none;
                     padding: 4px 8px;
-                    font-size: 16px;
                     font-weight: bold;
                 }
                 QToolButton:hover {
@@ -328,6 +327,10 @@ class PluginItem(QFrame):
                     border-radius: 4px;
                 }
             """)
+            # Use larger font for menu icon to be visible on Windows
+            menu_font = self._menu_btn.font()
+            menu_font.setPointSize(14)
+            self._menu_btn.setFont(menu_font)
             self._menu_btn.setPopupMode(QToolButton.InstantPopup)
 
             menu = QMenu(self)
