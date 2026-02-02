@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QTextBrowser,
     QInputDialog,
     QAction,
+    QActionGroup,
     QMainWindow,
     QDialogButtonBox,
 )
@@ -377,7 +378,7 @@ class GPManagerApp(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(quit_action)
 
-        tag_menu = self.menu_bar.addMenu("Tag")
+        tag_menu = self.menu_bar.addMenu("Tags")
         set_tag_name_action = QAction("Set Name", self)
         set_tag_name_action.triggered.connect(self.set_tag_name)
         set_tag_key_action = QAction("Set Key", self)
@@ -407,6 +408,15 @@ class GPManagerApp(QMainWindow):
 
         self.tag_menu = tag_menu
 
+        # Readers menu
+        self.readers_menu = self.menu_bar.addMenu("Readers")
+        self._reader_action_group = QActionGroup(self)
+        self._reader_action_group.setExclusive(True)
+        self._reader_actions = []
+        self._no_readers_action = QAction("No readers found", self)
+        self._no_readers_action.setEnabled(False)
+        self.readers_menu.addAction(self._no_readers_action)
+
         self.config = self.load_config()
         self.write_config()
 
@@ -420,13 +430,8 @@ class GPManagerApp(QMainWindow):
 
         self.layout.addWidget(horizontal_rule())
 
-        # Reader selection row
-        reader_layout = QHBoxLayout()
-        self.reader_dropdown = QComboBox()
-        self.reader_dropdown.currentIndexChanged.connect(self.on_reader_select)
-        reader_layout.addWidget(QLabel("Reader:"))
-        reader_layout.addWidget(self.reader_dropdown)
-        self.layout.addLayout(reader_layout)
+        # Track available readers (selection managed via Readers menu)
+        self._available_readers = []
 
         # Installed / Available lists
         self.installed_app_names = []
@@ -721,6 +726,10 @@ class GPManagerApp(QMainWindow):
         # Clear selection state
         self._selected_app_name = None
         self._selected_is_installed = False
+
+        # Clear visual selection in both lists
+        self.installed_list.clearSelection()
+        self.available_list.clearSelection()
 
         # Remove the details pane widgets
         for row in range(0, 3):
@@ -1162,37 +1171,64 @@ class GPManagerApp(QMainWindow):
             self.available_list.addItem(item)
         self.available_list.update()
 
-    def on_reader_select(self, index):
-        reader_name = self.reader_dropdown.itemText(index)
-        self.nfc_thread.selected_reader_name = reader_name
-
     def readers_updated(self, readers_list):
-        self.reader_dropdown.blockSignals(True)
-        self.reader_dropdown.clear()
+        """Handle reader list updates."""
+        self._available_readers = readers_list or []
+
+        # Update Readers menu
+        self._update_readers_menu(readers_list)
 
         if not readers_list:
             self.key = None
-            self.reader_dropdown.setDisabled(True)
             self.nfc_thread.selected_reader_name = None
             self.message_queue.add_message("No readers found.")
             self._update_action_buttons_state(False)
-            self.reader_dropdown.blockSignals(False)
             return
 
-        self.reader_dropdown.setEnabled(True)
-        self.reader_dropdown.addItems(readers_list)
         self.status_label.setText(
             f"Found {len(readers_list)} reader{'s' if len(readers_list)>1 else ''}."
         )
 
         if self.nfc_thread.selected_reader_name not in readers_list:
             self.nfc_thread.selected_reader_name = readers_list[0]
-            self.reader_dropdown.setCurrentIndex(0)
-        else:
-            idx = readers_list.index(self.nfc_thread.selected_reader_name)
-            self.reader_dropdown.setCurrentIndex(idx)
+            self._update_reader_menu_selection(readers_list[0])
 
-        self.reader_dropdown.blockSignals(False)
+    def _update_readers_menu(self, readers_list):
+        """Update the Readers menu with current reader list."""
+        # Clear existing reader actions
+        for action in self._reader_actions:
+            self._reader_action_group.removeAction(action)
+            self.readers_menu.removeAction(action)
+        self._reader_actions.clear()
+
+        if not readers_list:
+            if self._no_readers_action not in [a for a in self.readers_menu.actions()]:
+                self.readers_menu.addAction(self._no_readers_action)
+            return
+
+        # Remove "No readers found" placeholder if present
+        self.readers_menu.removeAction(self._no_readers_action)
+
+        # Add reader actions
+        selected_reader = self.nfc_thread.selected_reader_name
+        for reader_name in readers_list:
+            action = QAction(reader_name, self)
+            action.setCheckable(True)
+            action.setChecked(reader_name == selected_reader)
+            action.triggered.connect(lambda checked, name=reader_name: self._on_reader_menu_select(name))
+            self._reader_action_group.addAction(action)
+            self.readers_menu.addAction(action)
+            self._reader_actions.append(action)
+
+    def _on_reader_menu_select(self, reader_name):
+        """Handle reader selection from menu."""
+        self.nfc_thread.selected_reader_name = reader_name
+        self._update_reader_menu_selection(reader_name)
+
+    def _update_reader_menu_selection(self, reader_name):
+        """Update checkmark in Readers menu to match selection."""
+        for action in self._reader_actions:
+            action.setChecked(action.text() == reader_name)
 
     def update_card_presence(self, present):
         if present:

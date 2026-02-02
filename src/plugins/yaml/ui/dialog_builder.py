@@ -358,9 +358,9 @@ class PluginDialog(QDialog):
             size = (400, 400)
             dialog_title = title
 
-        # Adjust size for Windows
+        # Adjust width for Windows (2x wider)
         if os.name == "nt":
-            size = (size[0] * 2, size[1] * 2)
+            size = (size[0] * 2, size[1])
 
         self.setWindowTitle(dialog_title)
         self.resize(*size)

@@ -1,48 +1,74 @@
-altgraph==0.17.5
-babel==2.17.0
-black==26.1.0
-certifi==2026.1.4
-cffi==2.0.0
-chardet==5.2.0
-charset-normalizer==3.4.4
-click==8.3.1
-colorama==0.4.6
-cryptography==46.0.4
-fido2==2.1.1
-idna==3.11
-iniconfig==2.3.0
-jaraco.classes==3.4.0
-jaraco.context==6.1.0
-jaraco.functools==4.4.0
-jeepney==0.9.0
-keyring==25.7.0
-libusb1==3.3.1
-Markdown==3.10.1
-more-itertools==10.8.0
-mypy_extensions==1.1.0
-ndeflib==0.3.3
-nfcpy==1.0.4
-packaging==26.0
-pathspec==1.0.4
-pillow==12.1.0
-platformdirs==4.5.1
-pluggy==1.6.0
-pycparser==3.0
-pycryptodome==3.23.0
-pyDes==2.0.1
-Pygments==2.19.2
-pyinstaller==6.18.0
-pyinstaller-hooks-contrib==2026.0
+# Cross-platform requirements for Global Platform GUI
+# For Windows with Python 3.9, use: pip install -r requirements-win.txt
+#
+# Platform markers:
+#   - Linux-only packages use: ; sys_platform == 'linux'
+#   - Windows-only packages use: ; sys_platform == 'win32'
+
+# GUI
 PyQt5==5.15.11
 PyQt5-Qt5==5.15.18
 PyQt5_sip==12.18.0
+
+# Build
+altgraph==0.17.5
+pyinstaller==6.18.0
+pyinstaller-hooks-contrib==2026.0
+
+# Core dependencies
+cryptography==46.0.4
+keyring==25.7.0
 pyscard==2.3.1
+pycryptodome==3.23.0
+pyDes==2.0.1
+cffi==2.0.0
+pycparser==3.0
+
+# NFC/FIDO
+nfcpy==1.0.4
+ndeflib==0.3.3
+fido2==2.1.1
 pyserial==3.5
-pytest==9.0.2
-python-gnupg==0.5.6
-pytokens==0.4.0
-PyYAML==6.0.3
+libusb1==3.3.1
+
+# Networking
 requests==2.32.5
-SecretStorage==3.5.0
-setuptools==80.10.2
+certifi==2026.1.4
+charset-normalizer==3.4.4
+chardet==5.2.0
+idna==3.11
 urllib3==2.6.3
+
+# YAML/Markdown
+PyYAML==6.0.3
+Markdown==3.10.1
+
+# GPG
+python-gnupg==0.5.6
+
+# Dev tools
+babel==2.17.0
+black==24.10.0
+click==8.1.7
+pytest==9.0.2
+iniconfig==2.3.0
+pluggy==1.6.0
+packaging==26.0
+pathspec==1.0.4
+mypy_extensions==1.1.0
+Pygments==2.19.2
+pytokens==0.4.0
+
+# Keyring backends (platform-specific)
+SecretStorage==3.5.0; sys_platform == 'linux'
+jeepney==0.9.0; sys_platform == 'linux'
+
+# Other
+colorama==0.4.6
+pillow==12.1.0
+platformdirs==4.5.1
+jaraco.classes==3.4.0
+jaraco.context==6.1.0
+jaraco.functools==4.4.0
+more-itertools==10.8.0
+setuptools==80.10.2

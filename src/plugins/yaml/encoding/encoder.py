@@ -7,6 +7,8 @@ Encodes field values into installation parameters using various encoding methods
 - Custom Python snippet execution
 """
 
+from __future__ import annotations
+
 import re
 from typing import Any, Callable, Optional
 

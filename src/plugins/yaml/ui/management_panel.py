@@ -5,6 +5,7 @@ Provides a UI for post-installation applet management, including
 action execution and state monitoring.
 """
 
+import os
 from typing import Any, Callable, Optional
 from dataclasses import dataclass
 
@@ -318,7 +319,11 @@ class ManagementDialog(QDialog):
         """
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumSize(450, 400)  # Increased for better Windows compatibility
+        # Adjust width for Windows (2x wider)
+        if os.name == "nt":
+            self.setMinimumSize(900, 400)
+        else:
+            self.setMinimumSize(450, 400)
 
         # Store actions for lookup during execution
         self._actions = {a.id: a for a in actions}

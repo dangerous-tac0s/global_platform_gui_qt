@@ -63,14 +63,24 @@ Check the [latest release](https://github.com/DangerousThings/global-platform-gu
 ### From Source
 
 Requirements:
-- Python 3.8+ (Linux/macOS)
-- **Python 3.9** (Windows) - PyQt5 has compatibility issues with Python 3.10+
+- **Python 3.9+** (Linux/macOS)
+- **Python 3.9 only** (Windows) - PyQt5 wheels for Windows require Python 3.9
 - Java (for GlobalPlatformPro)
+
+> [!IMPORTANT]
+> **Windows users**: You must use Python 3.9 and `requirements-win.txt`. The main `requirements.txt` contains Linux-only packages (SecretStorage, jeepney) that will fail to install on Windows.
 
 ```bash
 # Clone the repository
 git clone https://github.com/DangerousThings/global-platform-gui.git
 cd global-platform-gui
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+source venv/bin/activate        # Linux/macOS
+venv\Scripts\activate           # Windows
 
 # Install dependencies
 pip install -r requirements.txt          # Linux/macOS
