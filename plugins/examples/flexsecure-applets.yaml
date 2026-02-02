@@ -17,8 +17,8 @@ applet:
       display_name: Javacard Memory
       aid: A0000008466D656D6F727901
       storage:
-        persistent: 1024
-        transient: 256
+        persistent: 0
+        transient: 0
       description: |
         ## [Memory Usage Reporting](https://github.com/DangerousThings/javacard-memory)
         ### By: [StarGate01](https://github.com/stargate01) from [VivoKey](https://vivokey.com)
@@ -86,17 +86,3 @@ applet:
         Implements YubiKey-compatible HMAC-SHA1 challenge-response.
         Can be used for KeePassXC database unlocking and other
         HMAC-based authentication scenarios.
-
-    - filename: U2FApplet.cap
-      display_name: U2F Applet
-      aid: A0000006472F0002
-      storage:
-        persistent: 4484
-        transient: 0
-      description: |
-        ## [U2F Applet](https://github.com/AlessandroOrsini/U2FApplet)
-        ### FIDO U2F Authentication
-
-        Universal 2nd Factor (U2F) applet for hardware-based
-        two-factor authentication. Compatible with websites and
-        services that support U2F/FIDO security keys.

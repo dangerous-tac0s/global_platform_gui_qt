@@ -69,7 +69,7 @@ class GeneralTab(QWidget):
         debug_desc = QLabel(
             "Enable this option to see detailed logs for troubleshooting plugin issues."
         )
-        debug_desc.setStyleSheet("color: #666; font-size: 11px;")
+        debug_desc.setStyleSheet("color: #666;")
         debug_desc.setWordWrap(True)
         debug_layout.addWidget(debug_desc)
 
@@ -167,7 +167,7 @@ class StorageTab(QWidget):
             "Resetting creates a new empty storage file. Your existing data "
             "will be backed up to a timestamped file in the same directory."
         )
-        reset_desc.setStyleSheet("color: #666; font-size: 11px;")
+        reset_desc.setStyleSheet("color: #666;")
         reset_desc.setWordWrap(True)
         actions_layout.addWidget(reset_desc)
 
@@ -183,7 +183,7 @@ class StorageTab(QWidget):
             "• <b>System Keyring</b>: Uses your OS credential manager (recommended)\n"
             "• <b>GPG</b>: Uses a GPG key for encryption"
         )
-        info_text.setStyleSheet("color: #555; font-size: 11px;")
+        info_text.setStyleSheet("color: #555;")
         info_text.setWordWrap(True)
         info_text.setTextFormat(Qt.RichText)
         info_layout.addWidget(info_text)
@@ -292,14 +292,14 @@ class PluginItem(QFrame):
         # Type and details
         plugin_type = plugin_info.get("type", "unknown")
         type_label = QLabel(f"Type: {plugin_type}")
-        type_label.setStyleSheet("color: #333; font-size: 11px;")
+        type_label.setStyleSheet("color: #333;")
         info_layout.addWidget(type_label)
 
         # Description if available
         description = plugin_info.get("description", "")
         if description:
             desc_label = QLabel(description)
-            desc_label.setStyleSheet("color: #333; font-size: 11px;")
+            desc_label.setStyleSheet("color: #333;")
             desc_label.setWordWrap(True)
             info_layout.addWidget(desc_label)
 
@@ -307,7 +307,7 @@ class PluginItem(QFrame):
         caps = plugin_info.get("caps", [])
         if caps:
             caps_label = QLabel(f"Provides: {len(caps)} applet(s)")
-            caps_label.setStyleSheet("color: #333; font-size: 11px;")
+            caps_label.setStyleSheet("color: #333;")
             info_layout.addWidget(caps_label)
 
         layout.addLayout(info_layout, 1)
@@ -426,7 +426,7 @@ class ImportPluginDialog(QDialog):
         github_desc = QLabel(
             "Will search for gp-plugin.yaml or *.gp-plugin.yaml in the repository root."
         )
-        github_desc.setStyleSheet("color: #666; font-size: 11px; margin-left: 20px;")
+        github_desc.setStyleSheet("color: #666; margin-left: 20px;")
         github_desc.setWordWrap(True)
         source_layout.addWidget(github_desc)
 
@@ -708,7 +708,7 @@ class PluginsTab(QWidget):
         header = QLabel(
             "Enable or disable plugins. Disabled plugins will not load on next startup."
         )
-        header.setStyleSheet("color: #555; margin-bottom: 10px;")
+        header.setStyleSheet("color: #555;margin-bottom: 10px;")
         header.setWordWrap(True)
         layout.addWidget(header)
 

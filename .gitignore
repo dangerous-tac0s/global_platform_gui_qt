@@ -36,6 +36,9 @@ config.json
 data.enc.json
 *.broken.json
 
+# User plugin customizations (overrides bundled plugins)
+user_plugins/
+
 # OS
 .DS_Store
 Thumbs.db

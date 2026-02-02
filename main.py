@@ -2384,7 +2384,7 @@ if __name__ == "__main__":
     import platform
     if platform.system() == "Windows":
         # Use Segoe UI (Windows default) at readable size
-        font = QFont("Segoe UI", 12)
+        font = QFont("Segoe UI", 10)
     else:
         # Use system default on other platforms
         font = QFont()
