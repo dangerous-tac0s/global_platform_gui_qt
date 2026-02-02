@@ -781,14 +781,10 @@ class GPManagerApp(QMainWindow):
             content_layout.addWidget(label)
             content_layout.addStretch()
 
-        # Button container with vertical centering
+        # Button container - auto-sizes to fit buttons
         button_container = QWidget()
-        button_container.setFixedHeight(50)  # Fixed height for button area
         button_container_layout = QVBoxLayout(button_container)
-        button_container_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Add stretch above buttons to center vertically
-        button_container_layout.addStretch()
+        button_container_layout.setContentsMargins(0, 8, 0, 8)
 
         # Action buttons row
         button_row = QHBoxLayout()
@@ -826,9 +822,6 @@ class GPManagerApp(QMainWindow):
         button_row.addWidget(back_btn)
 
         button_container_layout.addLayout(button_row)
-
-        # Add stretch below buttons to center vertically
-        button_container_layout.addStretch()
 
         content_layout.addWidget(button_container)
 
@@ -2391,7 +2384,7 @@ if __name__ == "__main__":
     import platform
     if platform.system() == "Windows":
         # Use Segoe UI (Windows default) at readable size
-        font = QFont("Segoe UI", 10)
+        font = QFont("Segoe UI", 12)
     else:
         # Use system default on other platforms
         font = QFont()
