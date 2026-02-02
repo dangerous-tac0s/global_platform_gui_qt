@@ -2019,10 +2019,10 @@ class GPManagerApp(QMainWindow):
                 new_btn = msg_box.addButton("Create New", QMessageBox.AcceptRole)
                 skip_btn = msg_box.addButton("Continue Without", QMessageBox.RejectRole)
 
-                # Set minimum widths to ensure button text is fully visible on Windows
-                retry_btn.setMinimumWidth(100)
-                new_btn.setMinimumWidth(100)
-                skip_btn.setMinimumWidth(130)  # Wider for "Continue Without"
+                # Let buttons size based on their content with padding for platform fonts
+                for btn in [retry_btn, new_btn, skip_btn]:
+                    text_width = btn.fontMetrics().horizontalAdvance(btn.text())
+                    btn.setMinimumWidth(text_width + 30)  # Add padding for margins
 
                 # Add note about data safety
                 msg_box.setDetailedText(
