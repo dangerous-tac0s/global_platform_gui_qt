@@ -146,6 +146,7 @@ class ChangeKeyDialog(QDialog):
         button_layout = QHBoxLayout()
 
         self._reset_button = QPushButton("Reset to Default")
+        self._reset_button.setMinimumWidth(120)  # Ensure text is fully visible on Windows
         self._reset_button.clicked.connect(self._reset_to_default)
         button_layout.addWidget(self._reset_button)
 

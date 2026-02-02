@@ -2019,6 +2019,11 @@ class GPManagerApp(QMainWindow):
                 new_btn = msg_box.addButton("Create New", QMessageBox.AcceptRole)
                 skip_btn = msg_box.addButton("Continue Without", QMessageBox.RejectRole)
 
+                # Set minimum widths to ensure button text is fully visible on Windows
+                retry_btn.setMinimumWidth(100)
+                new_btn.setMinimumWidth(100)
+                skip_btn.setMinimumWidth(130)  # Wider for "Continue Without"
+
                 # Add note about data safety
                 msg_box.setDetailedText(
                     "Your existing secure storage file will NOT be deleted.\n\n"
@@ -2381,7 +2386,16 @@ if __name__ == "__main__":
 
     app.setWindowIcon(QIcon(resource_path("favicon.ico")))
 
-    font = QFont("Courier New", 10)
+    # Set application font - use system default with adjusted size for readability
+    # Windows often needs larger font sizes than Linux/macOS
+    import platform
+    if platform.system() == "Windows":
+        # Use Segoe UI (Windows default) at readable size
+        font = QFont("Segoe UI", 10)
+    else:
+        # Use system default on other platforms
+        font = QFont()
+        font.setPointSize(10)
     app.setFont(font)
 
     window = GPManagerApp()

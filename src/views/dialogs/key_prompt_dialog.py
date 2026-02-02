@@ -79,9 +79,11 @@ class KeyPromptDialog(QDialog):
 
         # Buttons
         self.reset_button = QPushButton("Reset to Default")
+        self.reset_button.setMinimumWidth(120)  # Ensure text is fully visible on Windows
         self.reset_button.clicked.connect(self._reset_to_default)
 
         self.submit_button = QPushButton("OK")
+        self.submit_button.setMinimumWidth(80)
         self.submit_button.clicked.connect(self.accept)
 
         layout.addRow(self.reset_button, self.submit_button)

@@ -98,6 +98,7 @@ class SourceConfigPage(QWizardPage):
 
         # Parse button for local files
         parse_local_btn = QPushButton("Extract Metadata from CAP")
+        parse_local_btn.setMinimumWidth(180)  # Ensure text visible on Windows
         parse_local_btn.clicked.connect(self._parse_local_cap)
         local_layout.addWidget(parse_local_btn)
 
@@ -177,6 +178,7 @@ class SourceConfigPage(QWizardPage):
 
         # Fetch selected button
         self._fetch_selected_btn = QPushButton("Fetch Selected && Extract Metadata")
+        self._fetch_selected_btn.setMinimumWidth(220)  # Ensure text visible on Windows
         self._fetch_selected_btn.clicked.connect(self._fetch_selected_caps)
         self._fetch_selected_btn.hide()
         github_layout.addWidget(self._fetch_selected_btn)
@@ -200,10 +202,12 @@ class SourceConfigPage(QWizardPage):
 
         plugin_btn_layout = QHBoxLayout()
         self._import_plugin_btn = QPushButton("Import Plugin Definition")
+        self._import_plugin_btn.setMinimumWidth(170)  # Ensure text visible on Windows
         self._import_plugin_btn.clicked.connect(self._import_discovered_plugin)
         plugin_btn_layout.addWidget(self._import_plugin_btn)
 
         self._skip_plugin_btn = QPushButton("Continue Manually")
+        self._skip_plugin_btn.setMinimumWidth(130)  # Ensure text visible on Windows
         self._skip_plugin_btn.clicked.connect(self._skip_discovered_plugin)
         plugin_btn_layout.addWidget(self._skip_plugin_btn)
 

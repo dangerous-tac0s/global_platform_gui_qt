@@ -318,7 +318,7 @@ class ManagementDialog(QDialog):
         """
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumSize(400, 300)
+        self.setMinimumSize(450, 400)  # Increased for better Windows compatibility
 
         # Store actions for lookup during execution
         self._actions = {a.id: a for a in actions}
@@ -357,6 +357,8 @@ class ManagementDialog(QDialog):
     def showEvent(self, event):
         """Auto-refresh state when dialog is shown."""
         super().showEvent(event)
+        # Adjust size to fit content (helps on Windows)
+        self.adjustSize()
         # Use a timer to refresh after the dialog is fully displayed
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(100, self._initial_refresh)
