@@ -1,5 +1,10 @@
 @echo off
 REM Build Windows executable for GlobalPlatform GUI
+REM
+REM REQUIREMENTS:
+REM   - Python 3.9 (PyQt5 has compatibility issues with Python 3.10+)
+REM   - pip install -r requirements-win.txt
+REM
 setlocal enabledelayedexpansion
 
 echo === Building GlobalPlatform GUI for Windows ===

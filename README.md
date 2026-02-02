@@ -63,7 +63,8 @@ Check the [latest release](https://github.com/DangerousThings/global-platform-gu
 ### From Source
 
 Requirements:
-- Python 3.8+
+- Python 3.8+ (Linux/macOS)
+- **Python 3.9** (Windows) - PyQt5 has compatibility issues with Python 3.10+
 - Java (for GlobalPlatformPro)
 
 ```bash
@@ -72,7 +73,8 @@ git clone https://github.com/DangerousThings/global-platform-gui.git
 cd global-platform-gui
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements.txt          # Linux/macOS
+pip install -r requirements-win.txt      # Windows (Python 3.9)
 
 # Run
 python main.py
@@ -94,7 +96,7 @@ make linux          # Linux AppImage
 make linux-signed   # Linux AppImage with GPG signature
 make macos          # macOS .app bundle + DMG
 make macos-signed   # macOS with GPG signature
-make windows        # Windows executable (run on Windows)
+make windows        # Windows executable (requires Python 3.9)
 ```
 
 ### Signing
