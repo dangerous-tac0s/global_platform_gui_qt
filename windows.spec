@@ -80,7 +80,6 @@ a = Analysis(
         'scipy',
     ],
     noarchive=False,
-    optimize=0,
 )
 
 pyz = PYZ(a.pure, cipher=block_cipher)
