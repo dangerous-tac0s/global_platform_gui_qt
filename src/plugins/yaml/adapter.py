@@ -18,6 +18,7 @@ from .schema import (
     AIDConstruction,
     PluginSchema,
     SourceType,
+    VariantDefinition,
 )
 from .parser import YamlPluginParser
 from .ui.dialog_builder import DialogBuilder, PluginDialog
@@ -46,6 +47,7 @@ class YamlPluginAdapter:
         self._schema = schema
         self._yaml_path = yaml_path
         self._selected_cap: Optional[str] = None
+        self._selected_variant: Optional["VariantDefinition"] = None
         self._dialog: Optional[PluginDialog] = None
         self._dialog_values: dict[str, Any] = {}
         self._param_encoder = ParameterEncoder(schema.parameters)
@@ -55,16 +57,8 @@ class YamlPluginAdapter:
         self.release = None
         self.storage = {}
 
-        # Load storage from schema if defined
-        if schema.applet.metadata.storage:
-            cap_name = self._get_cap_name()
-            if cap_name:
-                self.storage = {
-                    cap_name: {
-                        "persistent": schema.applet.metadata.storage.persistent,
-                        "transient": schema.applet.metadata.storage.transient,
-                    }
-                }
+        # Load storage from schema - both default and per-variant
+        self._load_storage_requirements()
 
     @classmethod
     def from_file(cls, path: str | Path) -> "YamlPluginAdapter":
@@ -131,18 +125,33 @@ class YamlPluginAdapter:
         """
         Create and return a configuration dialog if defined.
 
+        Uses variant-specific install_ui if the selected CAP has one defined,
+        otherwise falls back to the plugin-level install_ui.
+
         Args:
             parent: Parent widget
 
         Returns:
             QDialog instance or None if no UI defined
         """
-        if not self._schema.has_install_ui():
-            return None
+        # Check for variant-specific install_ui first
+        install_ui = None
+        title_name = self._schema.applet.metadata.name
+
+        if self._selected_variant:
+            if self._selected_variant.install_ui:
+                install_ui = self._selected_variant.install_ui
+            title_name = self._selected_variant.display_name
+
+        # Fall back to plugin-level install_ui
+        if install_ui is None:
+            if not self._schema.has_install_ui():
+                return None
+            install_ui = self._schema.install_ui
 
         self._dialog = DialogBuilder.build(
-            self._schema.install_ui,
-            title=f"Configure {self._schema.applet.metadata.name}",
+            install_ui,
+            title=f"Configure {title_name}",
             parent=parent,
         )
 
@@ -416,8 +425,47 @@ class YamlPluginAdapter:
     def set_cap_name(self, cap_name: str, override_map=None):
         """Called when user selects a CAP file."""
         self._selected_cap = cap_name
+        # Find the corresponding variant if one exists
+        self._selected_variant = self._find_variant(cap_name)
+        # Clear cached dialog so it's rebuilt with variant-specific UI
+        self._dialog = None
         # YAML plugins don't use the override_map pattern
         self._override_instance = None
+
+    def _find_variant(self, cap_name: str) -> Optional[VariantDefinition]:
+        """Find the variant definition for a given CAP filename."""
+        for variant in self._schema.applet.variants:
+            if variant.filename == cap_name:
+                return variant
+        return None
+
+    def _load_storage_requirements(self):
+        """Load storage requirements from schema - both default and per-variant."""
+        self.storage = {}
+
+        # Load default storage from metadata
+        default_storage = self._schema.applet.metadata.storage
+        default_cap = self._get_cap_name()
+
+        if default_storage and default_cap:
+            self.storage[default_cap] = {
+                "persistent": default_storage.persistent,
+                "transient": default_storage.transient,
+            }
+
+        # Load per-variant storage (overrides default)
+        for variant in self._schema.applet.variants:
+            if variant.storage:
+                self.storage[variant.filename] = {
+                    "persistent": variant.storage.persistent,
+                    "transient": variant.storage.transient,
+                }
+            elif default_storage:
+                # Use default storage for variants without their own
+                self.storage[variant.filename] = {
+                    "persistent": default_storage.persistent,
+                    "transient": default_storage.transient,
+                }
 
     def load_storage(self):
         """
@@ -433,14 +481,57 @@ class YamlPluginAdapter:
         self.release = release.lstrip("v")
         # Storage is already set from schema, no need to load from JSON
 
+    def get_display_names(self) -> dict[str, str]:
+        """
+        Return display names for CAP files.
+
+        Returns:
+            Dict mapping cap_filename to display name (from variant or metadata.name)
+        """
+        result = {}
+
+        # First, map variants to their display names
+        for variant in self._schema.applet.variants:
+            result[variant.filename] = variant.display_name
+
+        # For CAPs not in variants, use the default display name
+        default_display_name = self._schema.applet.metadata.name or self._schema.plugin.name
+
+        # Map fetched CAPs that aren't already mapped
+        for cap_name in self._fetched_cap_names:
+            if cap_name not in result:
+                result[cap_name] = default_display_name
+
+        # Also include the default cap name if we have one
+        default_cap = self._get_cap_name()
+        if default_cap and default_cap not in result:
+            result[default_cap] = default_display_name
+
+        return result
+
     def get_descriptions(self) -> dict[str, str]:
         """Return applet descriptions."""
-        cap_name = self._get_cap_name()
-        description = self._schema.applet.metadata.description or ""
+        result = {}
 
-        if description:
-            return {cap_name: description}
-        return {}
+        # First, map variants to their descriptions
+        for variant in self._schema.applet.variants:
+            if variant.description:
+                result[variant.filename] = variant.description
+
+        # For CAPs not in variants, use the default description
+        default_description = self._schema.applet.metadata.description or ""
+
+        # Map fetched CAPs that aren't already mapped
+        for cap_name in self._fetched_cap_names:
+            if cap_name not in result and default_description:
+                result[cap_name] = default_description
+
+        # Also include the default cap name if we have one
+        default_cap = self._get_cap_name()
+        if default_cap and default_cap not in result and default_description:
+            result[default_cap] = default_description
+
+        return result
 
     def get_result(self) -> dict[str, Any]:
         """
@@ -499,14 +590,28 @@ class YamlPluginAdapter:
 
     def get_aid_list(self) -> list[str]:
         """Get list of AIDs this plugin can handle."""
+        aids = []
+
+        # Collect per-variant AIDs (for multi-applet plugins)
+        for variant in self._schema.applet.variants:
+            if variant.aid:
+                aids.append(variant.aid)
+
+        # If we have variant AIDs, return those
+        if aids:
+            return aids
+
+        # Otherwise, check for single static AID
         aid = self._schema.get_aid()
         if aid:
             return [aid]
+
         # For dynamic AIDs, return the base prefix
         if self._schema.has_dynamic_aid():
             base = self._schema.applet.metadata.aid_construction.base
             if base:
                 return [base]
+
         return []
 
     def get_cap_for_aid(self, raw_aid: str) -> Optional[str]:
@@ -521,7 +626,7 @@ class YamlPluginAdapter:
         """
         norm_aid = raw_aid.upper().replace(" ", "")
 
-        # Helper to get the best cap name
+        # Helper to get the best cap name (for single-applet plugins)
         def get_best_cap_name() -> str:
             # Priority: selected cap > fetched caps > default name
             if self._selected_cap:
@@ -530,7 +635,14 @@ class YamlPluginAdapter:
                 return self._fetched_cap_names[0]
             return self._get_cap_name()
 
-        # Check for exact static AID match
+        # First, check per-variant AIDs (for multi-applet plugins)
+        for variant in self._schema.applet.variants:
+            if variant.aid:
+                variant_aid = variant.aid.upper().replace(" ", "")
+                if variant_aid == norm_aid:
+                    return variant.filename
+
+        # Check for exact static AID match (single-applet plugin)
         static_aid = self._schema.get_aid()
         if static_aid:
             if static_aid.upper().replace(" ", "") == norm_aid:
@@ -617,6 +729,9 @@ class YamlPluginAdapter:
         """
         Create a management dialog for this plugin.
 
+        Uses variant-specific management_ui if the selected CAP has one defined,
+        otherwise falls back to the plugin-level management_ui.
+
         Args:
             nfc_service: NFC thread service for card communication
             parent: Parent widget
@@ -625,8 +740,20 @@ class YamlPluginAdapter:
         Returns:
             ManagementDialog or None if no management UI defined
         """
-        if not self._schema.has_management_ui():
-            return None
+        # Check for variant-specific management_ui first
+        management_ui = None
+        title_name = self._schema.applet.metadata.name
+
+        if self._selected_variant:
+            if self._selected_variant.management_ui:
+                management_ui = self._selected_variant.management_ui
+            title_name = self._selected_variant.display_name
+
+        # Fall back to plugin-level management_ui
+        if management_ui is None:
+            if not self._schema.has_management_ui():
+                return None
+            management_ui = self._schema.management_ui
 
         from .ui.management_panel import (
             ActionDefinition,
@@ -636,7 +763,7 @@ class YamlPluginAdapter:
 
         # Convert actions
         actions = []
-        for action in self._schema.management_ui.actions:
+        for action in management_ui.actions:
             action_def = ActionDefinition(
                 id=action.id,
                 label=action.label,
@@ -649,7 +776,7 @@ class YamlPluginAdapter:
 
         # Convert state readers
         state_readers = None
-        if self._schema.management_ui.state_readers:
+        if management_ui.state_readers:
             state_readers = [
                 StateReaderDefinition(
                     id=r.id,
@@ -667,7 +794,7 @@ class YamlPluginAdapter:
                         "display_map": r.parse.display_map,
                     },
                 )
-                for r in self._schema.management_ui.state_readers
+                for r in management_ui.state_readers
             ]
 
         # Get the AID for SELECT
@@ -692,7 +819,7 @@ class YamlPluginAdapter:
         workflows = self._schema.workflows if self._schema.workflows else {}
 
         return ManagementDialog(
-            title=f"Manage {self._schema.applet.metadata.name}",
+            title=f"Manage {title_name}",
             actions=actions,
             state_readers=state_readers,
             nfc_service=nfc_service,

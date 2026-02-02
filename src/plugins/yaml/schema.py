@@ -247,6 +247,11 @@ class VariantDefinition:
     filename: str  # CAP filename (e.g., "SmartPGP-default.cap")
     display_name: str  # Friendly display name (e.g., "SmartPGP Default")
     description: Optional[str] = None  # Optional description
+    aid: Optional[str] = None  # Applet AID for this variant
+    # Per-variant overrides (optional - falls back to plugin-level definitions)
+    storage: Optional[StorageRequirements] = None
+    install_ui: Optional[InstallUIDefinition] = None
+    management_ui: Optional[ManagementUIDefinition] = None
 
 
 @dataclass

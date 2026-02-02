@@ -230,16 +230,38 @@ class YamlPluginParser:
 
     def _parse_variant(self, data: dict) -> "VariantDefinition":
         """Parse a variant definition."""
-        from .schema import VariantDefinition
+        from .schema import VariantDefinition, StorageRequirements
 
         filename = self._require(data, "filename", "variant")
         display_name = self._require(data, "display_name", "variant")
         description = self._get(data, "description")
+        aid = self._get(data, "aid")
+
+        # Parse optional per-variant overrides
+        storage = None
+        if "storage" in data:
+            storage_data = data["storage"]
+            storage = StorageRequirements(
+                persistent=self._get(storage_data, "persistent", 0),
+                transient=self._get(storage_data, "transient", 0),
+            )
+
+        install_ui = None
+        if "install_ui" in data:
+            install_ui = self._parse_install_ui(data["install_ui"])
+
+        management_ui = None
+        if "management_ui" in data:
+            management_ui = self._parse_management_ui(data["management_ui"])
 
         return VariantDefinition(
             filename=filename,
             display_name=display_name,
             description=description,
+            aid=aid,
+            storage=storage,
+            install_ui=install_ui,
+            management_ui=management_ui,
         )
 
     def _parse_source(self, data: dict) -> SourceDefinition:

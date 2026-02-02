@@ -7,9 +7,9 @@ plugin:
 applet:
   source:
     type: github_release
-    owner: ANSSI-FR
-    repo: SmartPGP
-    asset_pattern: SmartPGP-*-javacard-3.0.4.zip
+    owner: DangerousThings
+    repo: flexsecure-applets
+    asset_pattern: '*PGP*-default.cap'
     extract_pattern: '*.cap'
   metadata:
     name: SmartPGP

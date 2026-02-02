@@ -18,13 +18,21 @@ class YamlPluginLoader:
 
     Scans directories for .yaml and .yml files that contain valid
     plugin definitions.
+
+    Priority order (later overrides earlier):
+    1. plugins/ - bundled plugins
+    2. repos/ - legacy location (deprecated)
+    3. user_plugins/ - user-edited/created plugins (highest priority)
     """
 
-    # Default directories to scan for plugins
+    # Default directories to scan for plugins (order matters - later overrides)
     DEFAULT_PLUGIN_DIRS = [
         "plugins",
         "repos",
     ]
+
+    # User plugins directory (scanned from cwd, always writable)
+    USER_PLUGINS_DIR = "user_plugins"
 
     def __init__(self, base_dir: Optional[str] = None):
         """
@@ -51,6 +59,11 @@ class YamlPluginLoader:
 
         Returns:
             Dict mapping plugin name to adapter instance
+
+        Note:
+            User plugins (from user_plugins/ in cwd) are loaded LAST and will
+            override bundled plugins with the same name. This allows users to
+            customize bundled plugins without modifying the original files.
         """
         if directories is None:
             directories = self.DEFAULT_PLUGIN_DIRS
@@ -58,27 +71,34 @@ class YamlPluginLoader:
         self._loaded_plugins.clear()
         self._errors.clear()
 
+        # First, scan bundled plugin directories (from base_dir, may be in PyInstaller temp)
         for dir_name in directories:
             dir_path = self._base_dir / dir_name
             if dir_path.exists() and dir_path.is_dir():
                 self._scan_directory(dir_path, recursive)
 
+        # Then, scan user_plugins from cwd (always writable, persists across restarts)
+        # User plugins override bundled plugins with the same name
+        user_plugins_dir = Path.cwd() / self.USER_PLUGINS_DIR
+        if user_plugins_dir.exists() and user_plugins_dir.is_dir():
+            self._scan_directory(user_plugins_dir, recursive, allow_override=True)
+
         return self._loaded_plugins
 
-    def _scan_directory(self, directory: Path, recursive: bool):
+    def _scan_directory(self, directory: Path, recursive: bool, allow_override: bool = False):
         """Scan a directory for YAML plugin files."""
         try:
             for entry in directory.iterdir():
                 if entry.is_file() and entry.suffix.lower() in ('.yaml', '.yml'):
-                    self._try_load_plugin(entry)
+                    self._try_load_plugin(entry, allow_override)
                 elif recursive and entry.is_dir() and not entry.name.startswith('.'):
                     # Skip hidden directories and __pycache__
                     if entry.name != '__pycache__':
-                        self._scan_directory(entry, recursive)
+                        self._scan_directory(entry, recursive, allow_override)
         except PermissionError:
             self._errors.append((str(directory), "Permission denied"))
 
-    def _try_load_plugin(self, path: Path):
+    def _try_load_plugin(self, path: Path, allow_override: bool = False):
         """Try to load a YAML file as a plugin."""
         try:
             adapter = YamlPluginAdapter.from_file(path)
@@ -86,12 +106,18 @@ class YamlPluginLoader:
 
             # Check for duplicate names
             if plugin_name in self._loaded_plugins:
-                existing = self._loaded_plugins[plugin_name]
-                self._errors.append(
-                    (str(path), f"Duplicate plugin name '{plugin_name}' "
-                     f"(already loaded from {existing._yaml_path})")
-                )
-                return
+                if allow_override:
+                    # User plugin overrides bundled plugin
+                    print(f"User plugin '{plugin_name}' overrides bundled version")
+                    self._loaded_plugins[plugin_name] = adapter
+                    return
+                else:
+                    existing = self._loaded_plugins[plugin_name]
+                    self._errors.append(
+                        (str(path), f"Duplicate plugin name '{plugin_name}' "
+                         f"(already loaded from {existing._yaml_path})")
+                    )
+                    return
 
             self._loaded_plugins[plugin_name] = adapter
 

@@ -11,20 +11,92 @@ applet:
     owner: dangerousthings
     repo: flexsecure-applets
   metadata:
-    name: Javacard Memory
-    aid: A0000008466D656D6F727901
+    name: FlexSecure Applets
   variants:
-  - filename: javacard-memory.cap
-    display_name: Javacard Memory
-  - filename: keycard.cap
-    display_name: Keycard
-  - filename: SatoChip.cap
-    display_name: Satochip
-  - filename: Satodime.cap
-    display_name: Satodime
-  - filename: SeedKeeper.cap
-    display_name: Seedkeeper
-  - filename: vivokey-otp.cap
-    display_name: Vivokey Otp
-  - filename: YkHMACApplet.cap
-    display_name: Ykhmacapplet
+    - filename: javacard-memory.cap
+      display_name: Javacard Memory
+      aid: A0000008466D656D6F727901
+      storage:
+        persistent: 1024
+        transient: 256
+      description: |
+        ## [Memory Usage Reporting](https://github.com/DangerousThings/javacard-memory)
+        ### By: [StarGate01](https://github.com/stargate01) from [VivoKey](https://vivokey.com)
+
+        This is used to determine memory usage on your smart card.
+
+    - filename: SatoChip.cap
+      display_name: Satochip
+      aid: 5361746F4368697000
+      storage:
+        persistent: 19276
+        transient: 1363
+      description: |
+        ## [SatoChip](https://github.com/Toporin/SatochipApplet)
+        ### By [SatoChip.io](https://satochip.io/)
+
+        Satochip stands for **S**ecure **A**nonymous **T**rustless and **O**pen **Chip**.
+        It is a javacard applet that can be used as a secure hardware wallet.
+        The Satochip applet has full BIP32/BIP39 support.
+
+        Using Satochip, an initial BIP32 seed is imported in the javacard and private
+        keys are derived as requested by an external application.
+        *Private keys are never exported outside of the secure chip*.
+
+        Access to private keys is enforced through the use of PIN code (4-16 chars).
+
+    - filename: SeedKeeper.cap
+      display_name: SeedKeeper
+      aid: 536565644B656570657200
+      storage:
+        persistent: 20364
+        transient: 1219
+      description: |
+        ## [SeedKeeper](https://github.com/Toporin/Seedkeeper-Applet)
+        ### By [SatoChip.io](https://satochip.io/)
+
+        SeedKeeper is a javacard applet for secure storage and backup of
+        cryptographic seeds and secrets. It allows you to store master seeds,
+        2FA secrets, and other sensitive data on a secure smartcard.
+
+    - filename: vivokey-otp.cap
+      display_name: VivoKey OTP
+      aid: A0000005272101014150455801
+      storage:
+        persistent: 5264
+        transient: 2344
+      description: |
+        ## [VivoKey OTP](https://github.com/AlessandroOrsini/OATH-TOTP-Applet)
+        ### By [VivoKey](https://vivokey.com)
+
+        OATH TOTP/HOTP compatible applet for one-time password generation.
+        Compatible with apps like Yubico Authenticator for generating
+        2FA codes directly from your implant or smartcard.
+
+    - filename: YkHMACApplet.cap
+      display_name: YubiKey HMAC
+      aid: A000000527200101
+      storage:
+        persistent: 3300
+        transient: 352
+      description: |
+        ## [YubiKey HMAC](https://github.com/AlessandroOrsini/YkHMAC)
+        ### HMAC-SHA1 Challenge-Response
+
+        Implements YubiKey-compatible HMAC-SHA1 challenge-response.
+        Can be used for KeePassXC database unlocking and other
+        HMAC-based authentication scenarios.
+
+    - filename: U2FApplet.cap
+      display_name: U2F Applet
+      aid: A0000006472F0002
+      storage:
+        persistent: 4484
+        transient: 0
+      description: |
+        ## [U2F Applet](https://github.com/AlessandroOrsini/U2FApplet)
+        ### FIDO U2F Authentication
+
+        Universal 2nd Factor (U2F) applet for hardware-based
+        two-factor authentication. Compatible with websites and
+        services that support U2F/FIDO security keys.
