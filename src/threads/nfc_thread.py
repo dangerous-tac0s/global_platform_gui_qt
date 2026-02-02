@@ -611,65 +611,120 @@ class NFCHandlerThread(QThread):
         enc_key: str,
         mac_key: str,
         dek_key: str,
+        error_preface: str = "Unable to change key:",
+        max_retries: int = 2,
     ):
-        """Run a GP command with separate ENC/MAC/DEK keys for authentication."""
+        """Run a GP command with separate ENC/MAC/DEK keys for authentication.
+
+        Args:
+            command: The GP command arguments
+            enc_key: ENC key for SCP03
+            mac_key: MAC key for SCP03
+            dek_key: DEK key for SCP03
+            error_preface: Prefix for error messages
+            max_retries: Number of retries for transient errors
+        """
         if not self.selected_reader_name:
             return -1
 
-        result = subprocess.run(
-            [
-                *self.gp[os.name],
-                "--key-enc", enc_key,
-                "--key-mac", mac_key,
-                "--key-dek", dek_key,
-                "-r", self.selected_reader_name,
-                *command,
-            ],
-            capture_output=True,
-        )
+        # Transient errors that can be retried
+        transient_errors = [
+            "SCARD_E_NOT_TRANSACTED",
+            "SCARD_W_RESET_CARD",
+            "SCARD_E_COMM_DATA_LOST",
+        ]
 
-        stdout = result.stdout.decode()
-        stderr = result.stderr.decode()
+        last_stderr = ""
+        for attempt in range(max_retries + 1):
+            result = subprocess.run(
+                [
+                    *self.gp[os.name],
+                    "--key-enc", enc_key,
+                    "--key-mac", mac_key,
+                    "--key-dek", dek_key,
+                    "-r", self.selected_reader_name,
+                    *command,
+                ],
+                capture_output=True,
+            )
 
-        if result.returncode == 0:
-            return stdout
-        else:
-            self._emit_error(f"Unable to change key: {stderr[:60]}")
-            return -1
+            stdout = result.stdout.decode()
+            stderr = result.stderr.decode()
+            last_stderr = stderr
+
+            if result.returncode == 0:
+                return stdout
+
+            # Check if this is a transient error that can be retried
+            is_transient = any(err in stderr for err in transient_errors)
+            if is_transient and attempt < max_retries:
+                time.sleep(0.5)
+                continue
+            else:
+                break
+
+        self._emit_error(f"{error_preface} {last_stderr[:60]}")
+        return -1
 
     # =========================================================================
     # GlobalPlatform Commands
     # =========================================================================
 
-    def run_gp(self, command: List[str], error_preface: str = "Error:"):
-        """Run a GlobalPlatformPro command."""
+    def run_gp(self, command: List[str], error_preface: str = "Error:", max_retries: int = 2):
+        """Run a GlobalPlatformPro command with retry logic for transient errors.
+
+        Args:
+            command: The GP command arguments
+            error_preface: Prefix for error messages
+            max_retries: Number of retries for transient errors like SCARD_E_NOT_TRANSACTED
+        """
         if not self.key:
             return None  # Protect unknown tags
 
-        result = subprocess.run(
-            [
-                *self.gp[os.name],
-                "-k",
-                self.key,
-                "-r",
-                self.selected_reader_name,
-                *command,
-            ],
-            capture_output=True,
-        )
+        # Transient errors that can be retried
+        transient_errors = [
+            "SCARD_E_NOT_TRANSACTED",
+            "SCARD_W_RESET_CARD",
+            "SCARD_E_COMM_DATA_LOST",
+        ]
 
-        stdout = result.stdout.decode()
-        stderr = result.stderr.decode()
+        last_stderr = ""
+        for attempt in range(max_retries + 1):
+            result = subprocess.run(
+                [
+                    *self.gp[os.name],
+                    "-k",
+                    self.key,
+                    "-r",
+                    self.selected_reader_name,
+                    *command,
+                ],
+                capture_output=True,
+            )
 
-        # Check for useful output
-        has_useful_output = stdout and (
-            "PKG:" in stdout or "APP:" in stdout or "ISD:" in stdout
-        )
-        if result.returncode == 0 or has_useful_output:
-            return stdout
-        else:
-            self._emit_error(f"{error_preface} {stderr[:60]}")
-            return -1
+            stdout = result.stdout.decode()
+            stderr = result.stderr.decode()
+            last_stderr = stderr
+
+            # Check for useful output
+            has_useful_output = stdout and (
+                "PKG:" in stdout or "APP:" in stdout or "ISD:" in stdout
+            )
+            if result.returncode == 0 or has_useful_output:
+                return stdout
+
+            # Check if this is a transient error that can be retried
+            is_transient = any(err in stderr for err in transient_errors)
+            if is_transient and attempt < max_retries:
+                # Wait briefly before retrying to allow card/reader to stabilize
+                time.sleep(0.5)
+                continue
+            else:
+                # Either not transient or out of retries
+                break
+
+        self._emit_error(f"{error_preface} {last_stderr[:60]}")
+        return -1
 
     def get_installed_apps(self, _internal: bool = False) -> Dict[str, Optional[str]]:
         """
@@ -688,7 +743,7 @@ class NFCHandlerThread(QThread):
 
         try:
             result = self.run_gp(["--list"], "Unable to list apps:")
-            if result == -1:
+            if result is None or result == -1:
                 return {}
 
             lines = result.splitlines()

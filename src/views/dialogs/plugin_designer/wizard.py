@@ -177,8 +177,12 @@ class PluginDesignerWizard(QWizard):
                     "filename": vc.get("filename", ""),
                     "display_name": vc.get("display_name", ""),
                 }
+                if vc.get("aid"):
+                    variant_entry["aid"] = vc["aid"]
                 if vc.get("description"):
                     variant_entry["description"] = vc["description"]
+                if vc.get("storage"):
+                    variant_entry["storage"] = vc["storage"]
                 variants.append(variant_entry)
 
             if "applet" not in data:
@@ -339,6 +343,24 @@ class PluginDesignerWizard(QWizard):
             if "variants" in data["applet"]:
                 # Store variants for the source page to use
                 self._plugin_data["applet"]["variants"] = data["applet"]["variants"]
+                # Also populate _variant_configs and _selected_caps for the variants page
+                variant_configs = []
+                selected_caps = []
+                for v in data["applet"]["variants"]:
+                    variant_configs.append({
+                        "filename": v.get("filename", ""),
+                        "display_name": v.get("display_name", ""),
+                        "description": v.get("description", ""),
+                        "aid": v.get("aid", ""),
+                        "storage": v.get("storage", {}),
+                    })
+                    selected_caps.append({
+                        "filename": v.get("filename", ""),
+                        "url": "",  # URL not stored in YAML, will be fetched
+                        "metadata": None,
+                    })
+                self._plugin_data["_variant_configs"] = variant_configs
+                self._plugin_data["_selected_caps"] = selected_caps
 
         if "install_ui" in data:
             self._plugin_data["install_ui"] = data["install_ui"]
@@ -352,38 +374,42 @@ class PluginDesignerWizard(QWizard):
         if "workflows" in data:
             self._plugin_data["workflows"] = data["workflows"]
 
+    def _get_user_plugins_dir(self) -> Path:
+        """
+        Get the user-writable plugins directory.
+
+        This is always in the current working directory (next to config.json),
+        NOT in the PyInstaller bundle temp directory. This ensures plugin
+        edits persist across app restarts.
+        """
+        import os
+        # Use current working directory (where config.json lives)
+        user_plugins = Path(os.getcwd()) / "user_plugins"
+        user_plugins.mkdir(exist_ok=True)
+        return user_plugins
+
     def accept(self):
-        """Handle wizard acceptance - auto-save to plugins directory."""
+        """Handle wizard acceptance - auto-save to user plugins directory."""
         yaml_content = self.generate_yaml()
 
-        # Determine save path
-        if self._original_path:
-            # Editing existing plugin
-            old_path = Path(self._original_path)
-            plugins_dir = old_path.parent
+        # Always save to user_plugins directory for persistence
+        # This works for both new plugins and edits to bundled plugins
+        plugins_dir = self._get_user_plugins_dir()
 
-            plugin_name = self._plugin_data.get("plugin", {}).get("name", "untitled")
-            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in plugin_name)
-            save_path = plugins_dir / f"{safe_name}.yaml"
+        plugin_name = self._plugin_data.get("plugin", {}).get("name", "untitled")
+        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in plugin_name)
+        save_path = plugins_dir / f"{safe_name}.yaml"
 
-            # If name changed, we'll save to new path and delete old
-            old_file_will_be_replaced = (save_path == old_path)
-        else:
-            # New plugin
-            plugins_dir = Path(__file__).parent.parent.parent.parent.parent / "plugins"
-            plugins_dir.mkdir(exist_ok=True)
-
-            plugin_name = self._plugin_data.get("plugin", {}).get("name", "untitled")
-            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in plugin_name)
-            save_path = plugins_dir / f"{safe_name}.yaml"
-            old_file_will_be_replaced = False
+        # Check if we're editing an existing user plugin (same name, same dir)
+        old_path = Path(self._original_path) if self._original_path else None
+        old_is_in_user_dir = old_path and old_path.parent == plugins_dir if old_path else False
 
         # Check for overwrite (only if not the same file being edited)
-        if save_path.exists() and not (self._original_path and save_path == Path(self._original_path)):
+        if save_path.exists() and not (old_is_in_user_dir and save_path == old_path):
             reply = QMessageBox.question(
                 self,
                 "Overwrite?",
-                f"Plugin '{safe_name}.yaml' already exists.\nOverwrite?",
+                f"Plugin '{safe_name}.yaml' already exists in user_plugins.\nOverwrite?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -394,11 +420,9 @@ class PluginDesignerWizard(QWizard):
             with open(save_path, "w", encoding="utf-8") as f:
                 f.write(yaml_content)
 
-            # Delete old file if name changed during edit
-            if self._original_path and not old_file_will_be_replaced:
-                old_path = Path(self._original_path)
-                if old_path.exists() and old_path != save_path:
-                    old_path.unlink()
+            # Delete old file only if it was in user_plugins and name changed
+            if old_is_in_user_dir and old_path and old_path.exists() and old_path != save_path:
+                old_path.unlink()
 
             self.plugin_created.emit(yaml_content, str(save_path))
             QMessageBox.information(
@@ -458,6 +482,7 @@ class IntroPage(QWizardPage):
         # Plugin name
         layout.addWidget(QLabel("Plugin Name:"))
         self._name_edit = QLineEdit()
+        self._name_edit.setMinimumWidth(250)  # Prevent collapse on Windows
         self._name_edit.setPlaceholderText("e.g., my-applet")
         self.registerField("plugin_name*", self._name_edit)
         layout.addWidget(self._name_edit)
@@ -466,18 +491,21 @@ class IntroPage(QWizardPage):
         layout.addWidget(QLabel("Description:"))
         self._desc_edit = QTextEdit()
         self._desc_edit.setMaximumHeight(80)
+        self._desc_edit.setMinimumWidth(300)  # Prevent collapse on Windows
         self._desc_edit.setPlaceholderText("Brief description of what this plugin does")
         layout.addWidget(self._desc_edit)
 
         # Version
         layout.addWidget(QLabel("Version:"))
         self._version_edit = QLineEdit("1.0.0")
+        self._version_edit.setMinimumWidth(100)  # Prevent collapse on Windows
         self.registerField("plugin_version", self._version_edit)
         layout.addWidget(self._version_edit)
 
         # Author
         layout.addWidget(QLabel("Author:"))
         self._author_edit = QLineEdit()
+        self._author_edit.setMinimumWidth(250)  # Prevent collapse on Windows
         self._author_edit.setPlaceholderText("Your name or organization")
         self.registerField("plugin_author", self._author_edit)
         layout.addWidget(self._author_edit)
@@ -642,14 +670,19 @@ class PreviewPage(QWizardPage):
         if variant_configs and len(variant_configs) > 1:
             summary_lines.append(f"<b>Variants:</b> {len(variant_configs)}")
             for vc in variant_configs:
-                summary_lines.append(f"  • {vc.get('display_name', vc.get('filename', 'Unknown'))}")
+                display_name = vc.get('display_name', vc.get('filename', 'Unknown'))
+                aid = vc.get('aid', '')
+                if aid:
+                    summary_lines.append(f"  • {display_name} (AID: {aid})")
+                else:
+                    summary_lines.append(f"  • {display_name}")
         elif selected_caps:
             cap_names = [cap["filename"] for cap in selected_caps]
             summary_lines.append(f"<b>CAP Files:</b> {', '.join(cap_names)}")
-
-        aid = wizard.get_plugin_value("applet.metadata.aid")
-        if aid:
-            summary_lines.append(f"<b>AID:</b> {aid}")
+            # Show single AID for non-variant plugins
+            aid = wizard.get_plugin_value("applet.metadata.aid")
+            if aid:
+                summary_lines.append(f"<b>AID:</b> {aid}")
 
         self._summary_label.setText("<br>".join(summary_lines))
 

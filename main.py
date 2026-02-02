@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QPushButton,
     QListWidget,
+    QListWidgetItem,
     QComboBox,
     QHBoxLayout,
     QGridLayout,
@@ -508,6 +509,7 @@ class GPManagerApp(QMainWindow):
         self.available_apps_info = {}  # {cap_name: (plugin_name, url)} - active provider
         self.cap_providers = {}  # {cap_name: [(plugin_name, url), ...]} - all providers
         self.app_descriptions = {}
+        self.app_display_names = {}  # {cap_name: display_name} - friendly names from metadata
         self.storage = {}
         disabled_plugins = self._get_disabled_plugins()
         for plugin_name, plugin_cls_or_instance in self.plugin_map.items():
@@ -597,9 +599,14 @@ class GPManagerApp(QMainWindow):
                     self.available_apps_info[cap_n] = (plugin_name, url)
 
             descriptions = plugin_instance.get_descriptions()
-
             for cap_n, description_md in descriptions.items():
                 self.app_descriptions[cap_n] = description_md
+
+            # Get display names from metadata
+            if hasattr(plugin_instance, 'get_display_names'):
+                display_names = plugin_instance.get_display_names()
+                for cap_n, display_name in display_names.items():
+                    self.app_display_names[cap_n] = display_name
 
             # Merge for easy access to storage requirements
             self.storage = self.storage | plugin_instance.storage
@@ -738,7 +745,8 @@ class GPManagerApp(QMainWindow):
         else:
             self.installed_list.clearSelection()
 
-        app_name = item.text()
+        # Get cap_name from UserRole data (for available list) or text (for installed)
+        app_name = item.data(Qt.UserRole) or item.text()
         # Strip version suffix if present (e.g., "App.cap (v1.0)" -> "App.cap")
         if " (v" in app_name:
             app_name = app_name.split(" (v")[0]
@@ -753,6 +761,7 @@ class GPManagerApp(QMainWindow):
         """Show details pane with app info and contextual action buttons."""
         # Check if we have a description for this app
         description = self.app_descriptions.get(app_name, "")
+        display_name = self.app_display_names.get(app_name, app_name)
 
         # Create content widget
         content_widget = QWidget()
@@ -766,8 +775,8 @@ class GPManagerApp(QMainWindow):
             viewer.setHtml(markdown.markdown(textwrap.dedent(description)))
             content_layout.addWidget(viewer)
         else:
-            # No description - show app name
-            label = QLabel(f"<b>{app_name}</b>")
+            # No description - show display name
+            label = QLabel(f"<b>{display_name}</b>")
             label.setWordWrap(True)
             content_layout.addWidget(label)
             content_layout.addStretch()
@@ -983,12 +992,18 @@ class GPManagerApp(QMainWindow):
                 if plugin_name not in disabled_plugins:
                     self.available_apps_info[cap_n] = (plugin_name, url)
 
-            # Update descriptions
+            # Update descriptions and display names
             plugin_instance = get_plugin_instance(self.plugin_map.get(plugin_name))
             if plugin_instance:
                 descriptions = plugin_instance.get_descriptions()
                 for cap_n, description_md in descriptions.items():
                     self.app_descriptions[cap_n] = description_md
+
+                # Update display names
+                if hasattr(plugin_instance, 'get_display_names'):
+                    display_names = plugin_instance.get_display_names()
+                    for cap_n, display_name in display_names.items():
+                        self.app_display_names[cap_n] = display_name
 
     def _on_all_plugins_fetched(self, results: dict):
         """Handle completion of all plugin fetches."""
@@ -1120,6 +1135,8 @@ class GPManagerApp(QMainWindow):
         self.plugin_map = load_plugins()
         if self.plugin_map:
             print("Reloaded plugins:", list(self.plugin_map.keys()))
+        # Refresh available apps info and UI lists
+        self.update_plugin_releases()
 
     def populate_available_list(self):
         self.available_list.clear()
@@ -1143,7 +1160,11 @@ class GPManagerApp(QMainWindow):
 
             if cap_name in unsupported_apps or cap_name in self.installed_app_names:
                 continue
-            self.available_list.addItem(cap_name)
+            # Use display name from metadata, fallback to cap filename
+            display_name = self.app_display_names.get(cap_name, cap_name)
+            item = QListWidgetItem(display_name)
+            item.setData(Qt.UserRole, cap_name)  # Store actual cap_name for lookups
+            self.available_list.addItem(item)
         self.available_list.update()
 
     def on_reader_select(self, index):
@@ -1283,9 +1304,11 @@ class GPManagerApp(QMainWindow):
         if not selected:
             return
 
-        cap_name = selected[0].text()
+        # Get cap_name from UserRole data (or text() as fallback)
+        cap_name = selected[0].data(Qt.UserRole) or selected[0].text()
+        display_name = self.app_display_names.get(cap_name, cap_name)
 
-        self.message_queue.add_message(f"Installing: {cap_name}")
+        self.message_queue.add_message(f"Installing: {display_name}")
 
         # Mutual exclusivity check (also handled by AppletController.validate_install)
         if "U2F" in cap_name and "FIDO2.cap" in self.installed_app_names:
@@ -1375,18 +1398,31 @@ class GPManagerApp(QMainWindow):
         selected = self.installed_list.selectedItems()
         if not selected:
             return
-        # Assume the installed list displays the .cap filename (or "Unknown: <aid>")
-        # May have version suffix like "(v1.0)" which needs to be stripped
-        cap_name = selected[0].text()
+
+        item = selected[0]
+        display_text = item.text()
+
         # Strip version suffix if present (e.g., "App.cap (v1.0)" -> "App.cap")
-        if " (v" in cap_name:
-            cap_name = cap_name.split(" (v")[0]
+        if " (v" in display_text:
+            display_text = display_text.split(" (v")[0]
+
+        # Get the CAP name from UserRole data (stored during list population)
+        # This is more reliable than parsing the display text
+        cap_name = item.data(Qt.UserRole)
 
         # If the entry indicates an unknown app (i.e. no plugin info), fallback to uninstall by AID.
-        if "Unknown" in cap_name:
-            raw_aid = cap_name.split(" ", 1)[1]
-            self.message_queue.add_message(f"Attempting to uninstall: {raw_aid}")
-            return self.nfc_thread.uninstall_app(raw_aid, force=True)
+        # Format: "Unknown: <aid>" or "Unknown from <plugin>: <aid>"
+        if "Unknown" in display_text:
+            # Extract AID - it's always after the last colon followed by space
+            if ": " in display_text:
+                raw_aid = display_text.split(": ")[-1].strip()
+                self.message_queue.add_message(f"Attempting to uninstall by AID: {raw_aid}")
+                return self.nfc_thread.uninstall_app(raw_aid, force=True)
+
+        # No CAP name stored means we can't proceed with normal uninstall
+        if not cap_name:
+            self.message_queue.add_message(f"No CAP info available for {display_text}.")
+            return
 
         # Look up available info for the selected cap.
         if cap_name not in self.available_apps_info:
@@ -1494,20 +1530,26 @@ class GPManagerApp(QMainWindow):
                     if matched_plugin_name:
                         break
 
-            # Display either the cap name or "Unknown"
+            # Display either the display name or "Unknown"
             if matched_cap:
                 self.installed_app_names.append(matched_cap)
-                display_text = matched_cap
+                display_name = self.app_display_names.get(matched_cap, matched_cap)
+                display_text = display_name
             elif matched_plugin_name:
                 display_text = f"Unknown from {matched_plugin_name}: {raw_aid}"
+                matched_cap = None  # Ensure no cap stored for unknown apps
             else:
                 display_text = f"Unknown: {raw_aid}"
+                matched_cap = None
 
             # Show version if available
             if version:
                 display_text += f" (v{version})"
 
-            self.installed_list.addItem(display_text)
+            item = QListWidgetItem(display_text)
+            if matched_cap:
+                item.setData(Qt.UserRole, matched_cap)  # Store cap_name for lookups
+            self.installed_list.addItem(item)
         self.populate_available_list()
         self.on_operation_complete(True)
 

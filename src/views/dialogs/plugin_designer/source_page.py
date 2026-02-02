@@ -88,6 +88,7 @@ class SourceConfigPage(QWizardPage):
         local_layout.addWidget(QLabel("File Path:"))
         path_layout = QHBoxLayout()
         self._local_path_edit = QLineEdit()
+        self._local_path_edit.setMinimumWidth(300)  # Prevent collapse on Windows
         self._local_path_edit.setPlaceholderText("/path/to/applet.cap")
         path_layout.addWidget(self._local_path_edit)
         browse_btn = QPushButton("Browse...")
@@ -108,6 +109,7 @@ class SourceConfigPage(QWizardPage):
         http_layout = QVBoxLayout(http_widget)
         http_layout.addWidget(QLabel("URL:"))
         self._http_url_edit = QLineEdit()
+        self._http_url_edit.setMinimumWidth(300)  # Prevent collapse on Windows
         self._http_url_edit.setPlaceholderText("https://example.com/applet.cap")
         http_layout.addWidget(self._http_url_edit)
 
@@ -125,6 +127,7 @@ class SourceConfigPage(QWizardPage):
 
         github_layout.addWidget(QLabel("GitHub Repository URL:"))
         self._github_url_edit = QLineEdit()
+        self._github_url_edit.setMinimumWidth(350)  # Prevent collapse on Windows
         self._github_url_edit.setPlaceholderText("https://github.com/owner/repo or github.com/owner/repo")
         self._github_url_edit.textChanged.connect(self._on_github_url_changed)
         github_layout.addWidget(self._github_url_edit)
@@ -136,6 +139,7 @@ class SourceConfigPage(QWizardPage):
 
         github_layout.addWidget(QLabel("Asset Pattern (optional):"))
         self._github_pattern_edit = QLineEdit()
+        self._github_pattern_edit.setMinimumWidth(200)  # Prevent collapse on Windows
         self._github_pattern_edit.setPlaceholderText("*.cap (matches any .cap file)")
         self._github_pattern_edit.setText("*.cap")
         github_layout.addWidget(self._github_pattern_edit)

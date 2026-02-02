@@ -41,7 +41,7 @@ class PluginFetchThread(QThread):
 
     def run(self):
         """Execute the fetch in background thread."""
-        from src.plugins import get_plugin_instance
+        from main import get_plugin_instance
 
         for plugin_name, plugin_cls_or_instance in self._plugin_map.items():
             try:

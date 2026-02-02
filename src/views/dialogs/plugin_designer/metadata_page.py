@@ -143,6 +143,7 @@ class MetadataPage(QWizardPage):
         # Applet Name
         layout.addWidget(QLabel("Applet Display Name:"))
         self._name_edit = QLineEdit()
+        self._name_edit.setMinimumWidth(250)  # Prevent collapse on Windows
         self._name_edit.setPlaceholderText("e.g., My Applet")
         layout.addWidget(self._name_edit)
 
@@ -152,6 +153,7 @@ class MetadataPage(QWizardPage):
 
         aid_layout.addWidget(QLabel("AID (5-16 bytes in hex):"))
         self._aid_edit = QLineEdit()
+        self._aid_edit.setMinimumWidth(250)  # Prevent collapse on Windows
         self._aid_edit.setPlaceholderText("e.g., D276000124010304")
         self._aid_edit.textChanged.connect(self._validate_aid)
         aid_layout.addWidget(self._aid_edit)
@@ -255,54 +257,65 @@ class MetadataPage(QWizardPage):
 
         # Check for multiple selected CAPs
         selected_caps = wizard.get_plugin_value("_selected_caps", [])
-        if len(selected_caps) > 1:
+        has_multiple_caps = len(selected_caps) > 1
+
+        if has_multiple_caps:
             cap_names = [cap["filename"] for cap in selected_caps]
             self._caps_info_label.setText(
                 f"Multiple CAP files selected: {', '.join(cap_names)}\n\n"
-                "Configure shared metadata here. On the next page, you can "
-                "set individual display names for each variant."
+                "This page configures SHARED metadata only.\n"
+                "On the next page, you'll configure each applet individually "
+                "(display name, AID, storage, description).\n\n"
+                "Note: Applet Name and AID below are optional for multi-applet plugins."
             )
             self._caps_info_label.show()
+            # Clear/hide fields that are per-variant
+            self._aid_status.setText("Optional - set per-applet on next page")
+            self._aid_status.setStyleSheet("color: gray;")
+            # Don't auto-populate name for multi-variant
+            if not self._name_edit.text():
+                self._name_edit.setPlaceholderText("(Set per-applet on next page)")
         else:
             self._caps_info_label.hide()
+            self._name_edit.setPlaceholderText("e.g., My Applet")
 
-        # Load existing metadata (for editing)
-        applet_name = wizard.get_plugin_value("applet.metadata.name", "")
-        if applet_name and not self._name_edit.text():
-            self._name_edit.setText(applet_name)
-        elif not self._name_edit.text():
-            # Try to get name from CAP metadata or filename
-            name_found = False
+            # Load existing metadata (for editing) - only for single-CAP plugins
+            applet_name = wizard.get_plugin_value("applet.metadata.name", "")
+            if applet_name and not self._name_edit.text():
+                self._name_edit.setText(applet_name)
+            elif not self._name_edit.text():
+                # Try to get name from CAP metadata or filename
+                name_found = False
 
-            # Check extracted metadata for package name
-            extracted = wizard.get_plugin_value("_extracted_metadata")
-            if extracted and extracted.package_name:
-                # Convert package name to display name (e.g., "org.example.MyApplet" -> "My Applet")
-                pkg_parts = extracted.package_name.split(".")
-                if pkg_parts:
-                    # Use last part, add spaces before capitals
-                    last_part = pkg_parts[-1]
-                    import re
-                    display_name = re.sub(r'(?<!^)(?=[A-Z])', ' ', last_part)
-                    self._name_edit.setText(display_name)
-                    name_found = True
+                # Check extracted metadata for package name
+                extracted = wizard.get_plugin_value("_extracted_metadata")
+                if extracted and extracted.package_name:
+                    # Convert package name to display name (e.g., "org.example.MyApplet" -> "My Applet")
+                    pkg_parts = extracted.package_name.split(".")
+                    if pkg_parts:
+                        # Use last part, add spaces before capitals
+                        last_part = pkg_parts[-1]
+                        import re
+                        display_name = re.sub(r'(?<!^)(?=[A-Z])', ' ', last_part)
+                        self._name_edit.setText(display_name)
+                        name_found = True
 
-            # Fall back to first selected CAP filename
-            if not name_found and selected_caps:
-                first_cap = selected_caps[0]
-                filename = first_cap.get("filename", "")
-                if filename:
-                    # Remove .cap extension and convert to display name
-                    name = filename.replace(".cap", "").replace("-", " ").replace("_", " ")
-                    # Title case but preserve existing caps
-                    self._name_edit.setText(name.title())
-                    name_found = True
+                # Fall back to first selected CAP filename
+                if not name_found and selected_caps:
+                    first_cap = selected_caps[0]
+                    filename = first_cap.get("filename", "")
+                    if filename:
+                        # Remove .cap extension and convert to display name
+                        name = filename.replace(".cap", "").replace("-", " ").replace("_", " ")
+                        # Title case but preserve existing caps
+                        self._name_edit.setText(name.title())
+                        name_found = True
 
-            # Last resort: fall back to plugin name
-            if not name_found:
-                plugin_name = wizard.get_plugin_value("plugin.name", "")
-                if plugin_name:
-                    self._name_edit.setText(plugin_name.replace("-", " ").title())
+                # Last resort: fall back to plugin name
+                if not name_found:
+                    plugin_name = wizard.get_plugin_value("plugin.name", "")
+                    if plugin_name:
+                        self._name_edit.setText(plugin_name.replace("-", " ").title())
 
         # Load AID - check for static aid first, then aid_construction.base
         aid = wizard.get_plugin_value("applet.metadata.aid", "")
@@ -348,9 +361,19 @@ class MetadataPage(QWizardPage):
         if name:
             wizard.set_plugin_data("applet.metadata.name", name)
 
+        # Check if multiple CAPs selected (per-variant AIDs will be used instead)
+        selected_caps = wizard.get_plugin_value("_selected_caps", [])
+        has_multiple_caps = len(selected_caps) > 1
+
         # AID validation with user feedback
         aid = self._aid_edit.text().replace(" ", "").upper()
-        if not aid:
+
+        # For multi-variant plugins, AID is optional (each variant has its own)
+        if not aid and has_multiple_caps:
+            # Skip AID validation entirely - per-variant AIDs are set on variants page
+            pass
+        elif not aid:
+            # Single-variant plugin requires AID
             QMessageBox.warning(
                 self,
                 "AID Required",
@@ -359,48 +382,50 @@ class MetadataPage(QWizardPage):
             )
             self._aid_edit.setFocus()
             return False
+        else:
+            # Validate AID format if provided
+            if not re.match(r'^[0-9A-F]*$', aid):
+                QMessageBox.warning(
+                    self,
+                    "Invalid AID",
+                    "The AID contains invalid characters.\n\n"
+                    "Only hexadecimal characters (0-9, A-F) are allowed.",
+                )
+                self._aid_edit.setFocus()
+                return False
 
-        if not re.match(r'^[0-9A-F]*$', aid):
-            QMessageBox.warning(
-                self,
-                "Invalid AID",
-                "The AID contains invalid characters.\n\n"
-                "Only hexadecimal characters (0-9, A-F) are allowed.",
-            )
-            self._aid_edit.setFocus()
-            return False
+            if len(aid) % 2 != 0:
+                QMessageBox.warning(
+                    self,
+                    "Invalid AID",
+                    f"The AID has an odd number of characters ({len(aid)}).\n\n"
+                    "Each byte requires two hex characters.",
+                )
+                self._aid_edit.setFocus()
+                return False
 
-        if len(aid) % 2 != 0:
-            QMessageBox.warning(
-                self,
-                "Invalid AID",
-                f"The AID has an odd number of characters ({len(aid)}).\n\n"
-                "Each byte requires two hex characters.",
-            )
-            self._aid_edit.setFocus()
-            return False
+            if len(aid) < 10:
+                QMessageBox.warning(
+                    self,
+                    "AID Too Short",
+                    f"The AID is only {len(aid)//2} bytes.\n\n"
+                    "The minimum AID length is 5 bytes (10 hex characters).",
+                )
+                self._aid_edit.setFocus()
+                return False
 
-        if len(aid) < 10:
-            QMessageBox.warning(
-                self,
-                "AID Too Short",
-                f"The AID is only {len(aid)//2} bytes.\n\n"
-                "The minimum AID length is 5 bytes (10 hex characters).",
-            )
-            self._aid_edit.setFocus()
-            return False
+            if len(aid) > 32:
+                QMessageBox.warning(
+                    self,
+                    "AID Too Long",
+                    f"The AID is {len(aid)//2} bytes.\n\n"
+                    "The maximum AID length is 16 bytes (32 hex characters).",
+                )
+                self._aid_edit.setFocus()
+                return False
 
-        if len(aid) > 32:
-            QMessageBox.warning(
-                self,
-                "AID Too Long",
-                f"The AID is {len(aid)//2} bytes.\n\n"
-                "The maximum AID length is 16 bytes (32 hex characters).",
-            )
-            self._aid_edit.setFocus()
-            return False
-
-        wizard.set_plugin_data("applet.metadata.aid", aid)
+            # Only save AID if provided and valid
+            wizard.set_plugin_data("applet.metadata.aid", aid)
 
         # Storage
         persistent = self._persistent_spin.value()
