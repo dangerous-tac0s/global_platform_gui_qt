@@ -1,4 +1,6 @@
 # main.py
+from __future__ import annotations
+
 import datetime
 import json
 import pprint
@@ -1319,9 +1321,9 @@ class GPManagerApp(QMainWindow):
             default_length = len(error_message)
 
             if self.nfc_thread.storage["persistent"] < reqs["persistent"]:
-                error_message += f"\tPersistent Needed: {abs(self.nfc_thread.storage["persistent"] - reqs["persistent"])} bytes"
+                error_message += f"\tPersistent Needed: {abs(self.nfc_thread.storage['persistent'] - reqs['persistent'])} bytes"
             if self.nfc_thread.storage["transient"] < reqs["transient"]:
-                error_message += f"\tTransient Needed: {abs(self.nfc_thread.storage["transient"] - reqs["transient"])} bytes"
+                error_message += f"\tTransient Needed: {abs(self.nfc_thread.storage['transient'] - reqs['transient'])} bytes"
             if len(error_message) > default_length:
                 self.show_error_dialog(error_message)
                 return
@@ -1862,7 +1864,7 @@ class GPManagerApp(QMainWindow):
             self.nfc_thread.key = tag_key
             self.on_operation_complete(
                 True,
-                f"{self.secure_storage["tags"][card_id]["name"]}'s saved key is now: {tag_key}",
+                f"{self.secure_storage['tags'][card_id]['name']}'s saved key is now: {tag_key}",
             )
 
     def change_tag_key(self):
@@ -2241,7 +2243,7 @@ class GPManagerApp(QMainWindow):
                     self.secure_storage["tags"][uid]["key"] = default_key
 
                 self.message_queue.add_message(
-                    f"Updated {self.secure_storage["tags"][uid]["name"]} to known tags. Default key: {default_key}"
+                    f"Updated {self.secure_storage['tags'][uid]['name']} to known tags. Default key: {default_key}"
                 )
             else:
                 self.message_queue.add_message(
@@ -2334,7 +2336,7 @@ def select_gpg_key(context):
     gpg_keys = gpg.list_keys()
 
     gpg_options = {
-        f"{x["keyid"]} ({x["uids"][0]})": {
+        f"{x['keyid']} ({x['uids'][0]})": {
             "recipients": x["uids"],
             "keyid": x["keyid"],
         }

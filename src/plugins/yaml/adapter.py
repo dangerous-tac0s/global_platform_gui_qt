@@ -5,6 +5,8 @@ Provides a standard interface for YAML-defined plugins, handling
 CAP file discovery, installation dialogs, and management UI.
 """
 
+from __future__ import annotations
+
 import os
 import re
 from pathlib import Path
