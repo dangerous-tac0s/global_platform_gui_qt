@@ -61,7 +61,7 @@ from src.events.event_bus import (
 )
 from src.views.widgets.status_bar import MessageQueue
 from src.views.widgets.loading_indicator import LoadingIndicator
-from src.views.dialogs import KeyPromptDialog, ComboDialog, ChangeKeyDialog, ManageTagsDialog
+from src.views.dialogs import KeyPromptDialog, ComboDialog, ChangeKeyDialog, ManageTagsDialog, LoadingDialog
 from src.views.dialogs.plugin_designer import PluginDesignerWizard
 
 
@@ -643,6 +643,14 @@ class GPManagerApp(QMainWindow):
         self.nfc_thread.get_key_signal.connect(self.get_key)
         self.nfc_thread.key_setter_signal.connect(self.nfc_thread.key_setter)
         self.nfc_thread.cplc_retrieved_signal.connect(self.on_cplc_retrieved)
+
+        # Loading dialog for card operations
+        self._loading_dialog = LoadingDialog(parent=self)
+
+        # Track last operation for selection behavior
+        # "detection", "install", "uninstall", or None
+        self._last_operation = None
+        self._pending_install_cap = None  # Cap name being installed
 
         # Initially disable action buttons
         self._update_action_buttons_state(False)
@@ -1232,13 +1240,25 @@ class GPManagerApp(QMainWindow):
 
     def update_card_presence(self, present):
         if present:
+            # Show loading dialog when card is first detected
+            # Use 10s timeout - detection operations typically complete in seconds
+            if not self._loading_dialog.is_loading():
+                # Track as detection operation for selection behavior
+                self._last_operation = "detection"
+                self._pending_install_cap = None
+                self._loading_dialog.show_loading(
+                    timeout=10,
+                    on_timeout=self._on_loading_timeout
+                )
+
             if self.nfc_thread.valid_card_detected:
                 self.message_queue.add_message("Compatible card present.")
                 uid = self.nfc_thread.current_uid
 
+                # Only store if we have a valid card ID (not placeholder)
                 if (
                     self.secure_storage
-                    and uid
+                    and self._is_valid_storage_id(uid)
                     and not self.secure_storage["tags"].get(uid)
                 ):
                     self.secure_storage["tags"][uid] = {
@@ -1249,21 +1269,32 @@ class GPManagerApp(QMainWindow):
                 if self.nfc_thread.key is not None:
                     if (
                         self.secure_storage
+                        and self._is_valid_storage_id(uid)
                         and self.secure_storage["tags"].get(uid)
                         and not self.secure_storage["tags"][uid]["key"]
                     ):
                         self.secure_storage["tags"][uid]["key"] = self.nfc_thread.key
 
                     self._update_action_buttons_state(True)
-                    installed = self.nfc_thread.get_installed_apps()
-                    if installed is not None:
-                        self.on_installed_apps_updated(installed)
+                    # Note: NFC thread will emit installed_apps_updated_signal
+                    # after key_setter completes - don't block main thread here
             else:
-                self._update_action_buttons_state(False)
-                self.message_queue.add_message("Unsupported card present.")
+                # Card is incompatible - hide loading dialog
+                self._loading_dialog.hide_loading()
+                if self.nfc_thread.current_uid is not None:
+                    self._update_action_buttons_state(False)
+                    self.message_queue.add_message("Unsupported card present.")
         else:
+            # Card removed - hide loading dialog
+            self._loading_dialog.hide_loading()
             self._update_action_buttons_state(False)
             self.message_queue.add_message("No card present.")
+
+    def _on_loading_timeout(self):
+        """Handle loading dialog timeout."""
+        self.show_error_dialog(
+            "Operation timed out. Please check that your card reader is working properly."
+        )
 
     def process_nfc_status(self, status):
         self.message_queue.add_message(status)
@@ -1338,6 +1369,10 @@ class GPManagerApp(QMainWindow):
         # Get cap_name from UserRole data (or text() as fallback)
         cap_name = selected[0].data(Qt.UserRole) or selected[0].text()
         display_name = self.app_display_names.get(cap_name, cap_name)
+
+        # Track install operation for selection behavior
+        self._last_operation = "install"
+        self._pending_install_cap = cap_name
 
         self.message_queue.add_message(f"Installing: {display_name}")
 
@@ -1420,6 +1455,11 @@ class GPManagerApp(QMainWindow):
     def on_install_download_complete(self, file_path, params=None):
         self.download_bar.hide()
         self.download_bar.setValue(0)
+        # Show loading dialog for install operation
+        self._loading_dialog.show_loading(
+            timeout=60,
+            on_timeout=self._on_loading_timeout
+        )
         self.nfc_thread.install_app(file_path, params)
 
     #
@@ -1429,6 +1469,10 @@ class GPManagerApp(QMainWindow):
         selected = self.installed_list.selectedItems()
         if not selected:
             return
+
+        # Track uninstall operation for selection behavior
+        self._last_operation = "uninstall"
+        self._pending_install_cap = None
 
         item = selected[0]
         display_text = item.text()
@@ -1448,6 +1492,11 @@ class GPManagerApp(QMainWindow):
             if ": " in display_text:
                 raw_aid = display_text.split(": ")[-1].strip()
                 self.message_queue.add_message(f"Attempting to uninstall by AID: {raw_aid}")
+                # Show loading dialog for uninstall operation
+                self._loading_dialog.show_loading(
+                    timeout=60,
+                    on_timeout=self._on_loading_timeout
+                )
                 return self.nfc_thread.uninstall_app(raw_aid, force=True)
 
         # No CAP name stored means we can't proceed with normal uninstall
@@ -1481,6 +1530,12 @@ class GPManagerApp(QMainWindow):
         self.download_bar.setValue(0)
         self.message_queue.add_message(
             f"Uninstalling with {file_path.split(os.path.sep)[-1]}"
+        )
+
+        # Show loading dialog for uninstall operation
+        self._loading_dialog.show_loading(
+            timeout=60,
+            on_timeout=self._on_loading_timeout
         )
 
         if self.current_plugin:
@@ -1527,6 +1582,9 @@ class GPManagerApp(QMainWindow):
         installed_aids is a dict { AID_uppercase: version_string_or_None }.
         We must iterate installed_aids.keys() or items().
         """
+        # Hide loading dialog - card detection/install complete
+        self._loading_dialog.hide_loading()
+
         self.handle_tag_menu()
 
         # Hide details pane and restore installed apps list view
@@ -1582,6 +1640,30 @@ class GPManagerApp(QMainWindow):
                 item.setData(Qt.UserRole, matched_cap)  # Store cap_name for lookups
             self.installed_list.addItem(item)
         self.populate_available_list()
+
+        # Handle selection based on operation type
+        if self._last_operation == "install" and self._pending_install_cap:
+            # On successful install: select the newly installed app
+            for i in range(self.installed_list.count()):
+                item = self.installed_list.item(i)
+                if item.data(Qt.UserRole) == self._pending_install_cap:
+                    self.installed_list.setCurrentItem(item)
+                    break
+            # Clear available list selection
+            self.available_list.clearSelection()
+        elif self._last_operation == "uninstall":
+            # On uninstall: clear all selections
+            self.installed_list.clearSelection()
+            self.available_list.clearSelection()
+        else:
+            # On detection or unknown: clear all selections
+            self.installed_list.clearSelection()
+            self.available_list.clearSelection()
+
+        # Reset operation tracking
+        self._last_operation = None
+        self._pending_install_cap = None
+
         self.on_operation_complete(True)
 
     #
@@ -1603,18 +1685,24 @@ class GPManagerApp(QMainWindow):
         event.accept()
 
     def show_error_dialog(self, message: str):
+        # Hide loading dialog if visible
+        self._loading_dialog.hide_loading()
+
         # Was there a bad touch?
         if "Failed to open secure channel" in message:
             # Yup
             uid = self.nfc_thread.current_uid
             self.nfc_thread.key = None
-            # Make sure we tell it we don't know the key in the config
-            self.config["known_tags"][uid] = False
-            self.write_config()
-            if self.secure_storage:
-                if self.secure_storage["tags"].get(uid):
-                    # Remove the naughty key
-                    self.secure_storage["tags"][uid]["key"] = None
+
+            # Only update storage if we have a valid card ID (not placeholder)
+            if self._is_valid_storage_id(uid):
+                # Make sure we tell it we don't know the key in the config
+                self.config["known_tags"][uid] = False
+                self.write_config()
+                if self.secure_storage:
+                    if self.secure_storage["tags"].get(uid):
+                        # Remove the naughty key
+                        self.secure_storage["tags"][uid]["key"] = None
 
             message = "Bad touch! Invalid key! Further attempts without a successful auth will brick the device!"
             QMessageBox.critical(self, "Error", message, QMessageBox.Ok)
@@ -1632,6 +1720,13 @@ class GPManagerApp(QMainWindow):
         on initial detection. In that case, we prompt for key and store
         it after CPLC retrieval.
         """
+        # Show loading dialog immediately when card is detected
+        if not self._loading_dialog.is_loading():
+            self._loading_dialog.show_loading(
+                timeout=10,
+                on_timeout=self._on_loading_timeout
+            )
+
         key = None
 
         # For contact cards without initial ID, still prompt for key
@@ -1674,6 +1769,10 @@ class GPManagerApp(QMainWindow):
         initial detection. In that case, we just return the key - storage
         will happen after CPLC retrieval via on_cplc_retrieved().
         """
+        # Hide loading dialog while key prompt is visible
+        was_loading = self._loading_dialog.is_loading()
+        self._loading_dialog.hide_loading()
+
         # Treat __CONTACT_CARD__ placeholder as no UID
         is_contact_placeholder = uid is None or uid == "__CONTACT_CARD__"
         is_new = not is_contact_placeholder and self.config["known_tags"].get(uid, False) != False
@@ -1706,7 +1805,17 @@ class GPManagerApp(QMainWindow):
                     else:
                         self.secure_storage["tags"][uid]["key"] = res
 
+            # Resume loading dialog after key entry
+            if was_loading:
+                self._loading_dialog.show_loading(
+                    timeout=10,
+                    on_timeout=self._on_loading_timeout
+                )
+
             return res
+        else:
+            # User cancelled - don't resume loading dialog
+            return None
 
     def update_title_bar(self, message: str):
         if not "None" in message and len(message) > 0:
@@ -1955,6 +2064,10 @@ class GPManagerApp(QMainWindow):
 
         return None
 
+    def _is_valid_storage_id(self, card_id: str | None) -> bool:
+        """Check if card_id is valid for storage (not None or placeholder)."""
+        return card_id is not None and card_id != "__CONTACT_CARD__"
+
     def manage_tags(self):
         """Open the manage tags dialog."""
         if not self.secure_storage:
@@ -1985,6 +2098,36 @@ class GPManagerApp(QMainWindow):
 
         QApplication.instance().quit()
 
+    def _cleanup_invalid_storage_ids(self):
+        """Remove invalid placeholder IDs from storage (e.g., __CONTACT_CARD__)."""
+        modified = False
+
+        # Clean up secure_storage tags
+        if self.secure_storage and "tags" in self.secure_storage:
+            invalid_ids = [
+                key for key in self.secure_storage["tags"]
+                if not self._is_valid_storage_id(key)
+            ]
+            for invalid_id in invalid_ids:
+                del self.secure_storage["tags"][invalid_id]
+                modified = True
+
+        # Clean up config known_tags
+        if "known_tags" in self.config:
+            invalid_ids = [
+                key for key in self.config["known_tags"]
+                if not self._is_valid_storage_id(key)
+            ]
+            for invalid_id in invalid_ids:
+                del self.config["known_tags"][invalid_id]
+                modified = True
+
+        # Save if we cleaned anything
+        if modified:
+            self.write_config()
+            if self.secure_storage:
+                self.write_secure_storage()
+
     def _load_secure_storage_with_retry(self):
         """
         Attempt to load secure storage with user-friendly error handling.
@@ -2002,6 +2145,7 @@ class GPManagerApp(QMainWindow):
             try:
                 self.secure_storage_instance.load()
                 self.secure_storage = self.secure_storage_instance.get_data()
+                self._cleanup_invalid_storage_ids()
                 return  # Success!
             except FileNotFoundError:
                 # File was deleted between check and load
@@ -2264,6 +2408,10 @@ class GPManagerApp(QMainWindow):
             json.dump(self.config, fh, indent=4)
 
     def update_known_tags(self, uid: str, default_key: bool | str):
+        # Defensive check - don't store placeholder IDs
+        if not self._is_valid_storage_id(uid):
+            return
+
         if self.config["known_tags"].get(uid) is None:
             if type(default_key) != type(False):
                 self.config["known_tags"][uid] = default_key == DEFAULT_KEY
@@ -2312,6 +2460,10 @@ class GPManagerApp(QMainWindow):
             key_config: KeyConfiguration object
         """
         if not self.secure_storage:
+            return
+
+        # Defensive check - don't store placeholder IDs
+        if not self._is_valid_storage_id(card_id):
             return
 
         tags = self.secure_storage.get("tags", {})

@@ -122,6 +122,7 @@ class NFCHandlerThread(QThread):
         self.key: Optional[str] = None
         self.card_detected: bool = False
         self.valid_card_detected: bool = False
+        self._pending_key: Optional[str] = None  # Key waiting to be processed async
 
         # Storage tracking
         self.storage = {"persistent": -1, "transient": -1}
@@ -160,6 +161,10 @@ class NFCHandlerThread(QThread):
                 self._paused_ack.clear()
 
             try:
+                # Process any pending key setup (runs GP commands async)
+                if self._pending_key is not None:
+                    self._process_pending_key()
+
                 # Get current readers (filter out SAM readers)
                 all_readers = readers()
                 filtered_readers = [
@@ -189,9 +194,6 @@ class NFCHandlerThread(QThread):
                         self.current_uid = uid
                         self.card_detected = True
 
-                        self.card_detected_signal.emit(uid)
-                        self.card_present_signal.emit(True)
-                        self._emit_card_presence(True, uid)
 
                         # Check if JCOP and get key
                         if self.is_jcop(self.selected_reader_name):
@@ -200,12 +202,18 @@ class NFCHandlerThread(QThread):
                         else:
                             self.valid_card_detected = False
 
+                        self.card_detected_signal.emit(uid)
+                        self.card_present_signal.emit(True)
+                        self._emit_card_presence(True, uid)
+
+
                     elif not is_present and card_present:
                         # Card removed
                         card_present = False
                         self.current_uid = None
                         self.current_identifier = None
                         self.key = None
+                        self._pending_key = None  # Clear any pending key operation
                         self.card_detected = False
                         self.valid_card_detected = False
 
@@ -503,10 +511,28 @@ class NFCHandlerThread(QThread):
         """
         Set the key from UI prompt.
 
-        Called from UI when user submits key.
+        Called from UI when user submits key. Sets a pending flag
+        that the NFC thread's polling loop will process asynchronously.
         """
         self.key = key
         if self.key is not None:
+            # Set flag for async processing by the NFC thread
+            self._pending_key = key
+
+    def _process_pending_key(self):
+        """
+        Process pending key setup asynchronously on the NFC thread.
+
+        Called from the polling loop when _pending_key is set.
+        """
+        if self._pending_key is None:
+            return
+
+        key = self._pending_key
+        self._pending_key = None
+        installed = {}
+
+        try:
             # Retrieve CPLC data and update identifier
             self.retrieve_cplc_and_update_identifier()
 
@@ -524,7 +550,14 @@ class NFCHandlerThread(QThread):
                 )
 
             self.title_bar_signal.emit(self.make_title_bar_string())
-            self.get_installed_apps(_internal=False)
+            installed = self.get_installed_apps(_internal=True)  # _internal=True since we're on NFC thread
+
+        except Exception as e:
+            self._emit_error(f"Error during key setup: {e}")
+
+        finally:
+            # Always emit the installed apps signal so loading dialog hides
+            self.installed_apps_updated_signal.emit(installed)
 
     def change_key(self, new_key: str):
         """Change the card's GlobalPlatform key."""

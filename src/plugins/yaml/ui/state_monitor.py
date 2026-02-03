@@ -501,8 +501,8 @@ class StateMonitor(QObject):
             if sw != "9000":
                 # Map common status words to user-friendly messages
                 sw_messages = {
-                    "6A88": "Not found",      # Referenced data not found (key not generated)
-                    "6A82": "Not found",      # File/app not found
+                    "6A88": "Data not found",      # Referenced data not found (key not generated)
+                    "6A82": "File/app not found",      # File/app not found
                     "6982": "Security status not satisfied",
                     "6983": "Auth blocked",   # PIN blocked
                     "6985": "Conditions not satisfied",
