@@ -113,6 +113,7 @@ class NFCHandlerThread(QThread):
         self._pause_event = Event()
         self._pause_event.set()  # Start unpaused
         self._paused_ack = Event()  # Acknowledge pause
+        self._reader_changed = Event()  # Signal reader switch to reset card state
 
         # Reader and card state
         self.known_readers: List[str] = []
@@ -160,6 +161,14 @@ class NFCHandlerThread(QThread):
                 self._pause_event.wait()
                 self._paused_ack.clear()
 
+            # Handle reader change - reset card state to trigger fresh detection
+            if self._reader_changed.is_set():
+                self._reader_changed.clear()
+                card_present = False
+                # Check new reader immediately and emit appropriate status
+                if self.selected_reader_name and not self.is_card_present():
+                    self._emit_status("No card present.")
+
             try:
                 # Process any pending key setup (runs GP commands async)
                 if self._pending_key is not None:
@@ -177,7 +186,7 @@ class NFCHandlerThread(QThread):
                     last_reader_list = reader_names
                     self.reader_detected_signal.emit(reader_names)
                     self.readers_updated_signal.emit(reader_names)  # Alias
-                    self._emit_status(f"Readers: {', '.join(reader_names) or 'None'}")
+                    # Note: main.py handles status messaging via readers_updated()
 
                     # Auto-select first reader if none selected
                     if reader_names and not self.selected_reader_name:
@@ -198,9 +207,11 @@ class NFCHandlerThread(QThread):
                         # Check if JCOP and get key
                         if self.is_jcop(self.selected_reader_name):
                             self.valid_card_detected = True
+                            self._emit_status("Compatible card present.")
                             self.get_key()
                         else:
                             self.valid_card_detected = False
+                            self._emit_status("Unsupported card present.")
 
                         self.card_detected_signal.emit(uid)
                         self.card_present_signal.emit(True)
@@ -239,6 +250,14 @@ class NFCHandlerThread(QThread):
         """Stop the monitoring thread."""
         self._stop_event.set()
         self.resume()
+
+    def signal_reader_changed(self):
+        """Signal that the reader selection has changed.
+
+        This resets the card detection state so the thread will
+        check for card presence on the newly selected reader.
+        """
+        self._reader_changed.set()
 
     # =========================================================================
     # Card Detection

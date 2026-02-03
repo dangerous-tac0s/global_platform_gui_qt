@@ -230,7 +230,7 @@ except ImportError:
 
 WIDTH_HEIGHT = [800, 600]
 
-APP_TITLE = "GlobalPlatformPro App Manager"
+APP_TITLE = "GlobalPlatform GUI"
 
 """
     [dict[str, bool]] known_keys:
@@ -274,6 +274,14 @@ os.makedirs(CAP_DOWNLOAD_DIR, exist_ok=True)
 # If you still need to skip certain .cap files, keep them here.
 #
 unsupported_apps = ["FIDO2.cap", "openjavacard-ndef-tiny.cap", "keycard.cap"]
+
+# AID prefix groups - apps sharing a prefix are mutually exclusive
+# When an installed AID starts with a group prefix, all available apps
+# whose AIDs also start with that prefix will be filtered out
+AID_PREFIX_GROUPS = [
+    # FIDO2 / U2F family (A0000006472F0002 vs A0000006472F000101)
+    "A0000006472F",
+]
 
 def get_plugin_instance(plugin):
     """
@@ -349,10 +357,10 @@ class GPManagerApp(QMainWindow):
         )  # Set the layout on the central widget
         self.setCentralWidget(self.central_widget)
 
-        # Status label at the top
-        self.status_label = QLabel("Checking for readers...")
-        self.layout.addWidget(self.status_label)
-        self.message_queue = MessageQueue(self.status_label)
+        # Status message queue at the top (animated conveyor)
+        self.message_queue = MessageQueue(self)
+        self.layout.addWidget(self.message_queue)
+        self.message_queue.add_message("Checking for readers...")
 
         # Loading indicator (shown during async operations)
         self.loading_indicator = LoadingIndicator(self)
@@ -435,6 +443,7 @@ class GPManagerApp(QMainWindow):
 
         # Installed / Available lists
         self.installed_app_names = []
+        self.installed_aids = {}  # Store raw AIDs for AID-based filtering
         self.installed_list = QListWidget()
         self.available_list = QListWidget()
 
@@ -1154,7 +1163,59 @@ class GPManagerApp(QMainWindow):
         # Refresh available apps info and UI lists
         self.update_plugin_releases()
 
+    def _is_aid_installed(self, cap_name: str, plugin_name: str) -> bool:
+        """Check if an available app's AID matches any installed AID.
+
+        Handles:
+        1. Same-AID matching (exact or prefix via get_cap_for_aid)
+        2. AID prefix group matching (related apps like fido2/u2f)
+
+        Args:
+            cap_name: The CAP filename to check
+            plugin_name: The plugin that provides this CAP
+
+        Returns:
+            True if this app's AID is already installed (should be filtered)
+        """
+        if not self.installed_aids:
+            return False
+
+        plugin_cls = self.plugin_map.get(plugin_name)
+        if not plugin_cls:
+            return False
+
+        plugin = get_plugin_instance(plugin_cls)
+        if not plugin:
+            return False
+
+        # Get this available app's AIDs for prefix group matching
+        app_aids = []
+        if hasattr(plugin, 'get_aid_list'):
+            app_aids = [a.upper().replace(" ", "") for a in plugin.get_aid_list()]
+
+        for installed_aid in self.installed_aids.keys():
+            norm_installed = installed_aid.upper().replace(" ", "")
+
+            # Check 1: Same-AID matching via plugin's get_cap_for_aid()
+            # This handles exact match, variant match, and dynamic AID prefix
+            if hasattr(plugin, 'get_cap_for_aid'):
+                matched_cap = plugin.get_cap_for_aid(installed_aid)
+                if matched_cap == cap_name:
+                    return True
+
+            # Check 2: AID prefix group matching
+            # If both installed and available AIDs share a prefix group, they conflict
+            for prefix in AID_PREFIX_GROUPS:
+                if norm_installed.startswith(prefix):
+                    for app_aid in app_aids:
+                        if app_aid.startswith(prefix):
+                            return True
+
+        return False
+
     def populate_available_list(self):
+        # Block signals during list manipulation to prevent spurious selection events
+        self.available_list.blockSignals(True)
         self.available_list.clear()
         disabled_plugins = self._get_disabled_plugins()
 
@@ -1174,18 +1235,61 @@ class GPManagerApp(QMainWindow):
                 if not alternative_found:
                     continue  # All providers disabled, skip this CAP
 
-            if cap_name in unsupported_apps or cap_name in self.installed_app_names:
+            if cap_name in unsupported_apps:
+                continue
+            if cap_name in self.installed_app_names:
+                continue
+            # AID-based filtering: filter apps whose AID matches installed AIDs
+            if self._is_aid_installed(cap_name, plugin_name):
                 continue
             # Use display name from metadata, fallback to cap filename
             display_name = self.app_display_names.get(cap_name, cap_name)
             item = QListWidgetItem(display_name)
             item.setData(Qt.UserRole, cap_name)  # Store actual cap_name for lookups
             self.available_list.addItem(item)
+        self.available_list.blockSignals(False)
         self.available_list.update()
+
+    def _get_short_reader_name(self, full_name: str) -> str:
+        """Extract a short, readable name from the full reader name.
+
+        Reader names often look like:
+        - "ACS ACR122U PICC Interface 0"
+        - "Identiv uTrust 3700 F CL Reader [CL Interface] 0"
+
+        This extracts just the meaningful part before brackets/interface info.
+        """
+        import re
+
+        # Remove trailing number (reader index)
+        name = full_name.rstrip('0123456789 ')
+
+        # Remove bracketed suffix if present
+        if '[' in name:
+            name = name[:name.index('[')].strip()
+
+        # Remove common suffixes
+        for suffix in ['PICC Interface', 'CL Interface', 'Interface']:
+            if name.endswith(suffix):
+                name = name[:-len(suffix)].strip()
+
+        # Remove "Reader" (case insensitive) and its leading whitespace
+        name = re.sub(r'\s*reader\b', '', name, flags=re.IGNORECASE).strip()
+
+        return name or full_name  # Fallback to full name if nothing left
 
     def readers_updated(self, readers_list):
         """Handle reader list updates."""
-        self._available_readers = readers_list or []
+        readers_list = readers_list or []
+        previous_readers = set(self._available_readers)
+        current_readers = set(readers_list)
+
+        # Determine what changed
+        added_readers = current_readers - previous_readers
+        removed_readers = previous_readers - current_readers
+
+        # Update stored list
+        self._available_readers = readers_list
 
         # Update Readers menu
         self._update_readers_menu(readers_list)
@@ -1197,13 +1301,37 @@ class GPManagerApp(QMainWindow):
             self._update_action_buttons_state(False)
             return
 
-        self.status_label.setText(
-            f"Found {len(readers_list)} reader{'s' if len(readers_list)>1 else ''}."
-        )
+        # Check if the selected reader is affected
+        selected_reader = self.nfc_thread.selected_reader_name
+        selected_reader_removed = selected_reader in removed_readers
 
-        if self.nfc_thread.selected_reader_name not in readers_list:
+        # Show specific connect/disconnect messages
+        for reader in added_readers:
+            is_selected = (reader == selected_reader or
+                          (selected_reader_removed and reader == readers_list[0]))
+            short_name = self._get_short_reader_name(reader)
+            self.message_queue.add_message(
+                f"Reader {short_name} is now connected.",
+                low_priority=not is_selected
+            )
+
+        for reader in removed_readers:
+            is_selected = reader == selected_reader
+            short_name = self._get_short_reader_name(reader)
+            self.message_queue.add_message(
+                f"Reader {short_name} is now disconnected.",
+                low_priority=not is_selected
+            )
+
+        # Auto-select new reader if selected one was removed
+        if selected_reader_removed:
             self.nfc_thread.selected_reader_name = readers_list[0]
             self._update_reader_menu_selection(readers_list[0])
+
+        # Show initial card state if no card is present
+        # (NFC thread only emits card_present_signal on state changes, not initial state)
+        if not self.nfc_thread.card_detected:
+            self.message_queue.add_message("No card present.")
 
     def _update_readers_menu(self, readers_list):
         """Update the Readers menu with current reader list."""
@@ -1234,8 +1362,20 @@ class GPManagerApp(QMainWindow):
 
     def _on_reader_menu_select(self, reader_name):
         """Handle reader selection from menu."""
+        if self.nfc_thread.selected_reader_name == reader_name:
+            return  # No change
+
         self.nfc_thread.selected_reader_name = reader_name
         self._update_reader_menu_selection(reader_name)
+
+        # Trigger card re-detection on the new reader
+        # Reset card state so NFC thread will re-check presence
+        self.nfc_thread.card_detected = False
+        self.nfc_thread.valid_card_detected = False
+        self.nfc_thread.current_uid = None
+        # Signal the NFC thread to reset its local card_present tracking
+        # This allows it to properly detect a card already on the new reader
+        self.nfc_thread.signal_reader_changed()
 
     def _update_reader_menu_selection(self, reader_name):
         """Update checkmark in Readers menu to match selection."""
@@ -1261,7 +1401,7 @@ class GPManagerApp(QMainWindow):
                 )
 
             if self.nfc_thread.valid_card_detected:
-                self.message_queue.add_message("Compatible card present.")
+                # Note: "Compatible card present." is emitted by NFC thread before key retrieval
                 uid = self.nfc_thread.current_uid
 
                 # Only store if we have a valid card ID (not placeholder)
@@ -1291,10 +1431,10 @@ class GPManagerApp(QMainWindow):
                     # after key_setter completes - don't block main thread here
             else:
                 # Card is incompatible - hide loading dialog
+                # Note: "Unsupported card present." is emitted by NFC thread
                 self._loading_dialog.hide_loading()
                 if self.nfc_thread.current_uid is not None:
                     self._update_action_buttons_state(False)
-                    self.message_queue.add_message("Unsupported card present.")
         else:
             # Card removed - hide loading dialog and clear cancellation flag
             self._loading_dialog.hide_loading()
@@ -1603,8 +1743,11 @@ class GPManagerApp(QMainWindow):
         # This ensures the UI returns to the list after install/uninstall
         self.handle_details_pane_back()
 
+        # Block signals during list manipulation to prevent spurious selection events
+        self.installed_list.blockSignals(True)
         self.installed_list.clear()
         self.installed_app_names = []
+        self.installed_aids = dict(installed_aids)  # Store for AID-based filtering
 
         for raw_aid in installed_aids.keys():
             # e.g. 'A000000308000010000100'
@@ -1651,6 +1794,7 @@ class GPManagerApp(QMainWindow):
             if matched_cap:
                 item.setData(Qt.UserRole, matched_cap)  # Store cap_name for lookups
             self.installed_list.addItem(item)
+        self.installed_list.blockSignals(False)
         self.populate_available_list()
 
         # Handle selection based on operation type
@@ -1782,7 +1926,6 @@ class GPManagerApp(QMainWindow):
 
         self.nfc_thread.key_setter_signal.emit(key)
         self.nfc_thread.status_update_signal.emit("Key set.")
-        self.update_card_presence(True)
 
     def prompt_for_key(self, uid: str, existing_key: str = None):
         """
