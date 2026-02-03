@@ -6,7 +6,7 @@ card detection, installation, or other operations are in progress.
 Does NOT block the event loop - signals are processed normally.
 """
 
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QWidget
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QWidget, QApplication
 from PyQt5.QtCore import Qt, QTimer, QRectF
 from PyQt5.QtGui import QPainter, QPen, QColor
 
@@ -68,10 +68,10 @@ class LoadingDialog(QDialog):
         super().__init__(parent)
 
         # Frameless overlay - NOT modal so events still process
+        # Note: No WindowStaysOnTopHint so other dialogs can appear above
         self.setWindowFlags(
-            Qt.Window
+            Qt.Tool
             | Qt.FramelessWindowHint
-            | Qt.WindowStaysOnTopHint
         )
         # Explicitly non-modal so main event loop keeps processing
         self.setModal(False)
@@ -144,10 +144,12 @@ class LoadingDialog(QDialog):
         self.raise_()
 
     def hide_loading(self):
-        """Hide the loading dialog."""
+        """Hide the loading dialog immediately."""
         self._timeout_timer.stop()
         self._spinner.stop()
         self.hide()
+        # Process events to ensure hide takes effect before other dialogs show
+        QApplication.processEvents()
 
     def _on_timeout(self):
         """Handle timeout - hide and call callback."""

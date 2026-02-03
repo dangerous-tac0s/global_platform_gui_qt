@@ -652,6 +652,10 @@ class GPManagerApp(QMainWindow):
         self._last_operation = None
         self._pending_install_cap = None  # Cap name being installed
 
+        # Key prompt cancellation flag - when True, all PCSC operations are halted
+        # This prevents sending wrong keys to cards which could brick them
+        self._key_prompt_cancelled = False
+
         # Initially disable action buttons
         self._update_action_buttons_state(False)
         self.current_plugin = None
@@ -1239,6 +1243,11 @@ class GPManagerApp(QMainWindow):
             action.setChecked(action.text() == reader_name)
 
     def update_card_presence(self, present):
+        # CRITICAL: If key prompt was cancelled, do NOT process card presence
+        # This prevents any PCSC operations or storage writes after cancel
+        if self._key_prompt_cancelled:
+            return
+
         if present:
             # Show loading dialog when card is first detected
             # Use 10s timeout - detection operations typically complete in seconds
@@ -1256,10 +1265,12 @@ class GPManagerApp(QMainWindow):
                 uid = self.nfc_thread.current_uid
 
                 # Only store if we have a valid card ID (not placeholder)
+                # AND we have a valid key (not None - user provided a key)
                 if (
                     self.secure_storage
                     and self._is_valid_storage_id(uid)
                     and not self.secure_storage["tags"].get(uid)
+                    and self.nfc_thread.key is not None  # CRITICAL: Only store if key is set
                 ):
                     self.secure_storage["tags"][uid] = {
                         "name": uid,
@@ -1285,8 +1296,9 @@ class GPManagerApp(QMainWindow):
                     self._update_action_buttons_state(False)
                     self.message_queue.add_message("Unsupported card present.")
         else:
-            # Card removed - hide loading dialog
+            # Card removed - hide loading dialog and clear cancellation flag
             self._loading_dialog.hide_loading()
+            self._key_prompt_cancelled = False  # Reset flag when card is removed
             self._update_action_buttons_state(False)
             self.message_queue.add_message("No card present.")
 
@@ -1720,8 +1732,13 @@ class GPManagerApp(QMainWindow):
         on initial detection. In that case, we prompt for key and store
         it after CPLC retrieval.
         """
+        # Clear cancellation flag at start of new detection
+        self._key_prompt_cancelled = False
+
         # Show loading dialog immediately when card is detected
         if not self._loading_dialog.is_loading():
+            self._last_operation = "detection"
+            self._pending_install_cap = None
             self._loading_dialog.show_loading(
                 timeout=10,
                 on_timeout=self._on_loading_timeout
@@ -1735,7 +1752,10 @@ class GPManagerApp(QMainWindow):
         if is_contact_placeholder:
             res = self.prompt_for_key(None)
             if not res:
-                self.show_error_dialog("No key found.")
+                # User cancelled - set flag to halt all PCSC operations
+                self._key_prompt_cancelled = True
+                self._loading_dialog.hide_loading()
+                self.message_queue.add_message("Key entry cancelled.")
                 return
             key = res
         else:
@@ -1752,7 +1772,10 @@ class GPManagerApp(QMainWindow):
                 res = self.prompt_for_key(card_id)
 
                 if not res:
-                    self.show_error_dialog("No key found.")
+                    # User cancelled - set flag to halt all PCSC operations
+                    self._key_prompt_cancelled = True
+                    self._loading_dialog.hide_loading()
+                    self.message_queue.add_message("Key entry cancelled.")
                     return
 
                 key = res
@@ -1860,11 +1883,19 @@ class GPManagerApp(QMainWindow):
         2. For contact cards (uid may be empty), storing key under CPLC identifier
         3. Merging data when both UID and CPLC entries exist
         """
+        # CRITICAL: If key prompt was cancelled, do NOT store anything
+        if self._key_prompt_cancelled:
+            return
+
         if not cplc_hash:
             return
 
         # Get the current key from NFC thread (set during authentication)
         key = self.nfc_thread.key
+
+        # CRITICAL: Do NOT store if key is None (user cancelled or no key provided)
+        if key is None:
+            return
         storage_changed = False
 
         if self.secure_storage is not None:
@@ -2093,6 +2124,21 @@ class GPManagerApp(QMainWindow):
                 self.write_secure_storage()
                 self.write_config()
                 self.message_queue.add_message("Tag data updated.")
+
+                # If a card is currently present, check if its key was deleted/cleared
+                # and invalidate the NFC thread's cached key
+                current_id = self.nfc_thread.card_id
+                if current_id and current_id != "__CONTACT_CARD__":
+                    tag_data = self.secure_storage.get("tags", {}).get(current_id)
+                    stored_key = tag_data.get("key") if tag_data else None
+
+                    # If the stored key is gone but NFC thread still has a key, clear it
+                    if not stored_key and self.nfc_thread.key:
+                        self.nfc_thread.key = None
+                        self._update_action_buttons_state(False)  # Disable buttons until key entered
+                        self.message_queue.add_message("Card key cleared - please re-enter key.")
+                        # Prompt for key again
+                        self.get_key(current_id)
 
     def quit_app(self):
 
@@ -2370,6 +2416,9 @@ class GPManagerApp(QMainWindow):
         self.nfc_thread.pause()
         # Wait for NFC thread to acknowledge pause (non-blocking with timeout)
         self.nfc_thread._paused_ack.wait(timeout=0.5)
+        # Sync the dict data to the instance before saving
+        if self.secure_storage is not None:
+            self.secure_storage_instance.set_data(self.secure_storage)
         self.secure_storage_instance.save()
         self.nfc_thread.resume()
 

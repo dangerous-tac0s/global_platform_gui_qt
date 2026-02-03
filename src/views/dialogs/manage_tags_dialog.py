@@ -243,14 +243,22 @@ class ManageTagsDialog(QDialog):
         )
 
         if reply == QMessageBox.Yes:
+            # Get the UID before deleting (needed for cleaning up config)
+            uid = tag_data.get("uid", "")
+
             # Remove from internal data
             if card_id in tags:
                 del tags[card_id]
                 self._modified = True
 
-            # Also remove from config known_tags
-            if card_id in self._config.get("known_tags", {}):
-                del self._config["known_tags"][card_id]
+            # Also remove from config known_tags - by BOTH card_id AND uid
+            # This is critical: on initial detection, the system looks up by UID
+            # before CPLC is retrieved, so we must clean up both entries
+            known_tags = self._config.get("known_tags", {})
+            if card_id in known_tags:
+                del known_tags[card_id]
+            if uid and uid in known_tags:
+                del known_tags[uid]
 
             # Reload table
             self._table.itemChanged.disconnect(self._on_item_changed)
@@ -281,14 +289,21 @@ class ManageTagsDialog(QDialog):
         )
 
         if reply == QMessageBox.Yes:
+            # Get UID before modifying
+            uid = tag_data.get("uid", "")
+
             tag_data["key"] = None
             if "key_config" in tag_data:
                 del tag_data["key_config"]
             self._modified = True
 
-            # Update config to mark as unknown key
-            if card_id in self._config.get("known_tags", {}):
-                self._config["known_tags"][card_id] = None
+            # Update config to mark as unknown key - BOTH card_id AND uid
+            # This is critical: on initial detection, the system looks up by UID
+            known_tags = self._config.get("known_tags", {})
+            if card_id in known_tags:
+                known_tags[card_id] = None
+            if uid and uid in known_tags:
+                known_tags[uid] = None
 
             # Reload table
             self._table.itemChanged.disconnect(self._on_item_changed)
