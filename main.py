@@ -13,7 +13,7 @@ import time
 import gnupg
 
 import markdown
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtGui import QIcon, QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
     QActionGroup,
     QMainWindow,
     QDialogButtonBox,
+    QSizePolicy,
 )
 from PyQt5.QtCore import QTimer, Qt, QSize, QEvent
 import sip
@@ -63,6 +64,29 @@ from src.views.widgets.status_bar import MessageQueue
 from src.views.widgets.loading_indicator import LoadingIndicator
 from src.views.dialogs import KeyPromptDialog, ComboDialog, ChangeKeyDialog, ManageTagsDialog, LoadingDialog
 from src.views.dialogs.plugin_designer import PluginDesignerWizard
+
+
+class ElidingLabel(QLabel):
+    """A QLabel that elides text when it doesn't fit the available width."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setToolTip(text)
+
+    def setText(self, text):
+        self._full_text = text
+        self.setToolTip(text)
+        self._update_elided_text()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elided_text()
+
+    def _update_elided_text(self):
+        fm = QFontMetrics(self.font())
+        elided = fm.elidedText(self._full_text, Qt.ElideRight, self.width())
+        super().setText(elided)
 
 
 class _StorageServiceAdapter:
@@ -764,6 +788,7 @@ class GPManagerApp(QMainWindow):
         # Restore the installed apps list
         self.apps_grid_layout.addWidget(QLabel("Installed Apps"), 0, 0)
         self.apps_grid_layout.addWidget(self.installed_list, 1, 0)
+        self.installed_list.show()  # Ensure visible after being hidden
         # Row 2, col 0 stays empty - buttons are in details pane only
 
     def _on_app_selected(self, item, is_installed: bool):
@@ -800,6 +825,27 @@ class GPManagerApp(QMainWindow):
         content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 8)  # Add bottom margin
 
+        # Header: App name with version (H1 style)
+        app_version = self._get_version_for_cap(app_name) if is_installed else None
+        app_title = f"{display_name} (v{app_version})" if app_version else display_name
+        app_name_label = ElidingLabel(app_title)
+        app_name_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        app_name_label.setMinimumWidth(100)
+        app_name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        content_layout.addWidget(app_name_label)
+
+        # Header: Plugin name (subtitle style)
+        plugin_info = self.available_apps_info.get(app_name)
+        if plugin_info:
+            plugin_name = plugin_info[0]
+            plugin_name_label = QLabel(f"Plugin: {plugin_name}")
+            plugin_name_label.setStyleSheet("font-size: 13px; color: #666;")
+            plugin_name_label.setWordWrap(False)
+            content_layout.addWidget(plugin_name_label)
+
+        # Small spacing before description
+        content_layout.addSpacing(8)
+
         # Markdown viewer for description
         if description:
             viewer = QTextBrowser()
@@ -807,10 +853,7 @@ class GPManagerApp(QMainWindow):
             viewer.setHtml(markdown.markdown(textwrap.dedent(description)))
             content_layout.addWidget(viewer)
         else:
-            # No description - show display name
-            label = QLabel(f"<b>{display_name}</b>")
-            label.setWordWrap(True)
-            content_layout.addWidget(label)
+            # No description - just add stretch
             content_layout.addStretch()
 
         # Button container - auto-sizes to fit buttons
@@ -870,7 +913,12 @@ class GPManagerApp(QMainWindow):
                 widget = item.widget()
                 if widget:
                     self.apps_grid_layout.removeWidget(widget)
-                    widget.setParent(None)
+                    # Don't orphan installed_list - we reuse it later
+                    # Orphaning a visible widget makes it a top-level window
+                    if widget is self.installed_list:
+                        widget.hide()  # Hide but keep parented
+                    else:
+                        widget.setParent(None)
 
         # Add the new content
         self.apps_grid_layout.addWidget(content_widget, 0, 0, 3, 1)
@@ -904,6 +952,21 @@ class GPManagerApp(QMainWindow):
             return len(actions) > 0
 
         return False
+
+    def _get_version_for_cap(self, cap_name: str) -> str | None:
+        """Get the version string for an installed cap by looking up its AID."""
+        if not hasattr(self, 'installed_aids') or not self.installed_aids:
+            return None
+
+        # Find the AID that maps to this cap_name
+        for raw_aid, version in self.installed_aids.items():
+            for pname, plugin_cls_or_instance in self.plugin_map.items():
+                plugin = get_plugin_instance(plugin_cls_or_instance)
+                if hasattr(plugin, 'get_cap_for_aid'):
+                    cap = plugin.get_cap_for_aid(raw_aid)
+                    if cap == cap_name:
+                        return version
+        return None
 
     def _show_management_dialog(self, app_name: str):
         """Show the management dialog for an installed app."""
@@ -1799,12 +1862,17 @@ class GPManagerApp(QMainWindow):
 
         # Handle selection based on operation type
         if self._last_operation == "install" and self._pending_install_cap:
-            # On successful install: select the newly installed app
+            # On successful install: select the newly installed app and show details
+            # Block signals to prevent double-triggering, then manually show details
+            self.installed_list.blockSignals(True)
             for i in range(self.installed_list.count()):
                 item = self.installed_list.item(i)
                 if item.data(Qt.UserRole) == self._pending_install_cap:
                     self.installed_list.setCurrentItem(item)
+                    # Manually trigger the details pane since signals are blocked
+                    self._on_app_selected(item, is_installed=True)
                     break
+            self.installed_list.blockSignals(False)
             # Clear available list selection
             self.available_list.clearSelection()
         elif self._last_operation == "uninstall":
