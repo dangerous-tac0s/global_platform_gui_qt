@@ -58,9 +58,14 @@ temp_manifest.MF
 
 # Backup files
 *.backup
+*.backup.*
 *.bak
 
 # Claude Code
 .claude/
 claude.md
 CLAUDE.md
+
+# Planning/design docs (working notes)
+docs/plans/
+REFACTOR_PLAN.md
