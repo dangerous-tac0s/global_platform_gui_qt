@@ -40,6 +40,10 @@ Looking for more information? Check out the [flexSecure repo docs](https://githu
   - Container Size
   - Permissions
   - Initial Record (Text and URI)
+- **Secure Storage Backup & Restore**
+  - Export encrypted backups with password or GPG encryption
+  - Import backups with conflict resolution
+  - Change encryption method (System Keyring or GPG)
 
 <img src="card_detected.png" width=350 /><br />
 
@@ -193,6 +197,44 @@ When users point Global Platform GUI at your repository, it will detect the plug
 - `gp-plugin.yaml` or `.gp-plugin.yaml` in repo root
 - `*.gp-plugin.yaml` in GitHub release assets
 
+## Secure Storage
+
+Global Platform GUI stores card keys securely using AES-256-GCM encryption. Keys are protected using either your system's keyring or a GPG key.
+
+### Encryption Methods
+
+- **System Keyring** (recommended): Uses your operating system's credential manager (GNOME Keyring, macOS Keychain, Windows Credential Manager)
+- **GPG**: Uses a GPG key for encryption, allowing hardware token integration (YubiKey, etc.)
+
+### Backup & Restore
+
+You can create encrypted backups of your stored keys from **Settings → Storage → Backup & Restore**:
+
+**Export Backup:**
+1. Click "Export Backup..."
+2. Choose encryption method:
+   - **Password**: Encrypt with a password you choose (PBKDF2-SHA256 with 600,000 iterations)
+   - **GPG Key**: Encrypt with a GPG public key
+3. Choose save location (`.gpbackup` file)
+
+**Import Backup:**
+1. Click "Import Backup..."
+2. Select the backup file
+3. Enter password (if password-protected) or confirm GPG decryption
+4. Resolve any conflicts (keep existing, use backup, or skip)
+
+### Changing Encryption Method
+
+To switch between System Keyring and GPG encryption:
+
+1. Go to **Settings → Storage**
+2. Click "Change Encryption Method..."
+3. Select the new method and configure (GPG key ID if needed)
+4. Confirm the change
+
+> [!NOTE]
+> Changing the encryption method re-encrypts all stored data. Make sure you have a backup first.
+
 ## Known Issues
 
 - No real validation for URI record creation
@@ -205,4 +247,4 @@ When users point Global Platform GUI at your repository, it will detect the plug
 - [ ] MIME records
 - [ ] Status.im support
 - [ ] CAP file caching
-- [ ] Export/backup of app config and secure storage
+- [x] Export/backup of app config and secure storage

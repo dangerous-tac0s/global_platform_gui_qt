@@ -7,9 +7,12 @@ for dependency injection and testing.
 Supports dual-lookup by CardIdentifier (CPLC hash preferred, UID fallback).
 """
 
+import logging
 from typing import Optional, Dict, Any, TYPE_CHECKING
 import sys
 import os
+
+logger = logging.getLogger(__name__)
 
 # Add parent directory to path to import existing secure_storage
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -21,6 +24,26 @@ except ImportError:
 
 if TYPE_CHECKING:
     from ..models.card import CardIdentifier
+
+
+class StorageError(Exception):
+    """Base exception for storage operations."""
+    pass
+
+
+class StorageLoadError(StorageError):
+    """Failed to load storage."""
+    pass
+
+
+class StorageDecryptError(StorageError):
+    """Failed to decrypt storage."""
+    pass
+
+
+class StorageSaveError(StorageError):
+    """Failed to save storage."""
+    pass
 
 
 class StorageService:
@@ -57,17 +80,22 @@ class StorageService:
 
         Returns:
             True if initialization successful
+
+        Raises:
+            StorageError: If initialization fails
         """
         if LegacySecureStorage is None:
-            return False
+            raise StorageError("SecureStorage module not available")
 
         try:
             self._storage = LegacySecureStorage(self._storage_path)
             self._storage.initialize(method, key_id)
-            self._data = self._storage.load()
+            self._storage.load()
+            self._data = self._storage.get_data()
             return True
-        except Exception:
-            return False
+        except Exception as e:
+            logger.error(f"Failed to initialize storage: {e}")
+            raise StorageError(f"Failed to initialize storage: {e}") from e
 
     def load(self) -> Dict[str, Any]:
         """
@@ -75,19 +103,34 @@ class StorageService:
 
         Returns:
             Decrypted data dictionary
+
+        Raises:
+            StorageLoadError: If loading fails
+            StorageDecryptError: If decryption fails
         """
         if self._data is not None:
             return self._data
 
         if LegacySecureStorage is None:
-            return {"tags": {}}
+            raise StorageLoadError("SecureStorage module not available")
 
         try:
             self._storage = LegacySecureStorage(self._storage_path)
-            self._data = self._storage.load()
+            self._storage.load()
+            self._data = self._storage.get_data()
+            if self._data is None:
+                self._data = {"tags": {}}
             return self._data
-        except Exception:
-            return {"tags": {}}
+        except FileNotFoundError as e:
+            logger.warning(f"Storage file not found: {e}")
+            raise StorageLoadError(f"Storage file not found: {e}") from e
+        except RuntimeError as e:
+            # RuntimeError from SecureStorage typically indicates decryption issues
+            logger.error(f"Failed to decrypt storage: {e}")
+            raise StorageDecryptError(f"Failed to decrypt storage: {e}") from e
+        except Exception as e:
+            logger.error(f"Failed to load storage: {e}")
+            raise StorageLoadError(f"Failed to load storage: {e}") from e
 
     def save(self, data: Optional[Dict[str, Any]] = None) -> None:
         """
@@ -95,6 +138,9 @@ class StorageService:
 
         Args:
             data: Data to save. Uses cached data if None.
+
+        Raises:
+            StorageSaveError: If saving fails
         """
         if data is not None:
             self._data = data
@@ -104,9 +150,13 @@ class StorageService:
 
         if self._storage is not None:
             try:
-                self._storage.save(self._data)
-            except Exception:
-                pass
+                self._storage.set_data(self._data)
+                self._storage.save()
+            except Exception as e:
+                logger.error(f"Failed to save storage: {e}")
+                raise StorageSaveError(f"Failed to save storage: {e}") from e
+        else:
+            raise StorageSaveError("Storage not initialized")
 
     def get_key_for_tag(self, uid: str) -> Optional[str]:
         """
