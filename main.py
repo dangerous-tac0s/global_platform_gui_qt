@@ -2987,9 +2987,22 @@ class GPManagerApp(QMainWindow):
         except Exception:
             storage_methods = [x for x in storage_methods if x != "gpg"]
 
-        # Why have them choose one if there's only one choice?
+        # When only one method available, initialize directly without dialog
         if len(storage_methods) == 1:
-            return storage_methods[0]
+            method = storage_methods[0]
+            try:
+                self.secure_storage_instance.initialize(method, initial_data=DEFAULT_DATA)
+                if self.secure_storage_instance.get_data():
+                    self.secure_storage = self.secure_storage_instance.get_data()
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Storage Initialization Failed",
+                    f"Could not create secure storage: {e}\n\n"
+                    "The application will continue without secure key storage.",
+                )
+                self.secure_storage = None
+            return method
 
         else:
 
