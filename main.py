@@ -1329,6 +1329,7 @@ class GPManagerApp(QMainWindow):
     def _on_export_backup(self):
         """Handle export backup request from settings dialog."""
         from datetime import datetime
+        from pathlib import Path
         from src.views.dialogs.backup_dialogs import ExportBackupDialog
         from secure_storage import export_backup
         from src.views.dialogs.plugin_designer.utils import show_save_file_dialog
@@ -1352,7 +1353,11 @@ class GPManagerApp(QMainWindow):
             password = dialog.get_password() if method == "password" else None
             gpg_key_id = dialog.get_gpg_key_id() if method == "gpg" else None
 
-            def on_file_selected(file_path: str):
+            # Generate datestamped filename
+            datestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"gp_backup_{datestamp}.gpbackup"
+
+            def do_export(file_path: str):
                 if not file_path:
                     return
 
@@ -1379,17 +1384,20 @@ class GPManagerApp(QMainWindow):
                         f"Failed to export backup:\n{e}"
                     )
 
-            # Ask for save location with datestamp in default filename
-            datestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            default_filename = f"gp_backup_{datestamp}.gpbackup"
-
-            show_save_file_dialog(
-                self,
-                "Export Backup",
-                [("GP Backup Files", "*.gpbackup"), ("All Files", "*.*")],
-                default_filename,
-                on_file_selected,
-            )
+            if method == "gpg":
+                # GPG export: auto-generate to home directory
+                home_dir = Path.home()
+                file_path = str(home_dir / default_filename)
+                do_export(file_path)
+            else:
+                # Password export: ask for save location
+                show_save_file_dialog(
+                    self,
+                    "Export Backup",
+                    [("GP Backup Files", "*.gpbackup"), ("All Files", "*.*")],
+                    default_filename,
+                    do_export,
+                )
 
     def _on_import_backup(self, settings_dialog=None):
         """Handle import backup request from settings dialog."""

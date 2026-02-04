@@ -2,6 +2,8 @@
 Backup-related dialogs for storage export/import functionality.
 """
 
+import subprocess
+
 from PyQt5.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -17,8 +19,84 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QMessageBox,
+    QComboBox,
 )
 from PyQt5.QtCore import Qt
+
+
+def _get_gpg_keys() -> list:
+    """
+    Get list of available GPG keys for encryption.
+
+    Only returns keys that have a valid (non-expired, non-revoked) encryption subkey.
+
+    Returns:
+        List of tuples: (key_id, display_string)
+    """
+    import time
+
+    keys = []
+    try:
+        # Get public keys with colons format
+        result = subprocess.run(
+            ["gpg", "--list-keys", "--with-colons"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            current_key_id = None
+            current_uids = []
+            has_valid_encryption_subkey = False
+            current_time = int(time.time())
+
+            for line in result.stdout.split('\n'):
+                parts = line.split(':')
+                if not parts or len(parts) < 2:
+                    continue
+
+                record_type = parts[0]
+                validity = parts[1] if len(parts) > 1 else ""
+
+                if record_type == 'pub':
+                    # Save previous key if it has valid encryption capability
+                    if current_key_id and current_uids and has_valid_encryption_subkey:
+                        display = f"{current_uids[0]} ({current_key_id[-8:]})"
+                        keys.append((current_key_id, display))
+
+                    # Start new key
+                    current_key_id = parts[4] if len(parts) > 4 else None
+                    current_uids = []
+                    has_valid_encryption_subkey = False
+
+                elif record_type == 'sub' and current_key_id:
+                    # Check if this subkey can encrypt
+                    # Field 11 contains capabilities, 'e' means encrypt
+                    capabilities = parts[11] if len(parts) > 11 else ""
+
+                    if 'e' in capabilities.lower():
+                        # Check validity - must not be expired/revoked
+                        # validity: '-' or 'u' = valid, 'e' = expired, 'r' = revoked
+                        if validity not in ('e', 'r', 'n', 'd'):
+                            # Also check expiration timestamp (field 6)
+                            exp_timestamp = parts[6] if len(parts) > 6 else ""
+                            if not exp_timestamp or int(exp_timestamp) > current_time:
+                                has_valid_encryption_subkey = True
+
+                elif record_type == 'uid' and current_key_id:
+                    # UID field is in position 9
+                    if len(parts) > 9 and parts[9]:
+                        current_uids.append(parts[9])
+
+            # Don't forget last key
+            if current_key_id and current_uids and has_valid_encryption_subkey:
+                display = f"{current_uids[0]} ({current_key_id[-8:]})"
+                keys.append((current_key_id, display))
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    return keys
 
 
 class ExportBackupDialog(QDialog):
@@ -94,11 +172,25 @@ class ExportBackupDialog(QDialog):
 
         # GPG key field
         self.gpg_group = QGroupBox("GPG Key")
-        gpg_layout = QHBoxLayout(self.gpg_group)
-        gpg_layout.addWidget(QLabel("Key ID:"))
-        self.gpg_key_input = QLineEdit()
-        self.gpg_key_input.setPlaceholderText("Enter GPG key ID or email")
-        gpg_layout.addWidget(self.gpg_key_input)
+        gpg_layout = QVBoxLayout(self.gpg_group)
+
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel("Select Key:"))
+        self.gpg_key_combo = QComboBox()
+        self.gpg_key_combo.setMinimumWidth(300)
+
+        # Populate with available GPG keys
+        self._gpg_keys = _get_gpg_keys()
+        if self._gpg_keys:
+            for key_id, display in self._gpg_keys:
+                self.gpg_key_combo.addItem(display, key_id)
+        else:
+            self.gpg_key_combo.addItem("No GPG keys found", "")
+            self.gpg_key_combo.setEnabled(False)
+
+        key_row.addWidget(self.gpg_key_combo)
+        gpg_layout.addLayout(key_row)
+
         self.gpg_group.setVisible(False)
         layout.addWidget(self.gpg_group)
 
@@ -148,8 +240,9 @@ class ExportBackupDialog(QDialog):
                 return
 
         else:  # GPG
-            if not self.gpg_key_input.text().strip():
-                QMessageBox.warning(self, "Error", "Please enter a GPG key ID.")
+            key_id = self.gpg_key_combo.currentData()
+            if not key_id:
+                QMessageBox.warning(self, "Error", "Please select a GPG key.")
                 return
 
         self.accept()
@@ -163,8 +256,8 @@ class ExportBackupDialog(QDialog):
         return self.password_input.text()
 
     def get_gpg_key_id(self) -> str:
-        """Get entered GPG key ID (only valid if method is 'gpg')."""
-        return self.gpg_key_input.text().strip()
+        """Get selected GPG key ID (only valid if method is 'gpg')."""
+        return self.gpg_key_combo.currentData() or ""
 
 
 class ImportPasswordDialog(QDialog):
@@ -414,11 +507,25 @@ class ChangeEncryptionDialog(QDialog):
 
         # GPG key field
         self.gpg_group = QGroupBox("GPG Key")
-        gpg_layout = QHBoxLayout(self.gpg_group)
-        gpg_layout.addWidget(QLabel("Key ID:"))
-        self.gpg_key_input = QLineEdit()
-        self.gpg_key_input.setPlaceholderText("Enter GPG key ID or email")
-        gpg_layout.addWidget(self.gpg_key_input)
+        gpg_layout = QVBoxLayout(self.gpg_group)
+
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel("Select Key:"))
+        self.gpg_key_combo = QComboBox()
+        self.gpg_key_combo.setMinimumWidth(300)
+
+        # Populate with available GPG keys
+        self._gpg_keys = _get_gpg_keys()
+        if self._gpg_keys:
+            for key_id, display in self._gpg_keys:
+                self.gpg_key_combo.addItem(display, key_id)
+        else:
+            self.gpg_key_combo.addItem("No GPG keys found", "")
+            self.gpg_key_combo.setEnabled(False)
+
+        key_row.addWidget(self.gpg_key_combo)
+        gpg_layout.addLayout(key_row)
+
         self.gpg_group.setVisible(self.gpg_radio.isChecked())
         layout.addWidget(self.gpg_group)
 
@@ -442,9 +549,11 @@ class ChangeEncryptionDialog(QDialog):
 
     def _on_change(self):
         """Validate and accept."""
-        if self.gpg_radio.isChecked() and not self.gpg_key_input.text().strip():
-            QMessageBox.warning(self, "Error", "Please enter a GPG key ID.")
-            return
+        if self.gpg_radio.isChecked():
+            key_id = self.gpg_key_combo.currentData()
+            if not key_id:
+                QMessageBox.warning(self, "Error", "Please select a GPG key.")
+                return
 
         # Confirm action
         result = QMessageBox.question(
@@ -464,5 +573,5 @@ class ChangeEncryptionDialog(QDialog):
         return "keyring" if self.keyring_radio.isChecked() else "gpg"
 
     def get_gpg_key_id(self) -> str:
-        """Get GPG key ID (only valid if method is 'gpg')."""
-        return self.gpg_key_input.text().strip()
+        """Get selected GPG key ID (only valid if method is 'gpg')."""
+        return self.gpg_key_combo.currentData() or ""
