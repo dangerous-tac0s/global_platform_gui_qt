@@ -1230,11 +1230,11 @@ class GPManagerApp(QMainWindow):
 
         dialog = SettingsDialog(self.plugin_map, self.config, storage_info, self)
         dialog.refresh_plugins_requested.connect(self._refresh_plugins_after_settings)
-        dialog.reset_storage_requested.connect(self._on_settings_reset_storage)
-        dialog.change_method_requested.connect(self._on_change_encryption_method)
+        dialog.reset_storage_requested.connect(lambda: self._on_settings_reset_storage(dialog))
+        dialog.change_method_requested.connect(lambda: self._on_change_encryption_method(dialog))
         dialog.export_backup_requested.connect(self._on_export_backup)
-        dialog.import_backup_requested.connect(self._on_import_backup)
-        dialog.browse_storage_requested.connect(self._on_browse_storage)
+        dialog.import_backup_requested.connect(lambda: self._on_import_backup(dialog))
+        dialog.browse_storage_requested.connect(lambda: self._on_browse_storage(dialog))
         dialog.cache_timeout_changed.connect(self._on_cache_timeout_changed)
 
         if dialog.exec_() == dialog.Accepted:
@@ -1273,10 +1273,14 @@ class GPManagerApp(QMainWindow):
 
         return info
 
-    def _on_settings_reset_storage(self):
+    def _on_settings_reset_storage(self, settings_dialog=None):
         """Handle reset storage request from settings dialog."""
         self._backup_and_create_new_storage()
         self._update_storage_menu_state()
+
+        # Update the settings dialog with new storage info
+        if settings_dialog:
+            settings_dialog.update_storage_info(self._get_storage_info())
 
     def _on_cache_timeout_changed(self, timeout_key: str):
         """Handle cache timeout change from settings dialog."""
@@ -1285,7 +1289,7 @@ class GPManagerApp(QMainWindow):
             self.secure_storage_instance.set_cache_timeout(timeout_key)
         self.write_config()
 
-    def _on_change_encryption_method(self):
+    def _on_change_encryption_method(self, settings_dialog=None):
         """Handle change encryption method request from settings dialog."""
         from src.views.dialogs.backup_dialogs import ChangeEncryptionDialog
 
@@ -1312,6 +1316,9 @@ class GPManagerApp(QMainWindow):
                     "Success",
                     f"Encryption method changed to {new_method}."
                 )
+                # Update the settings dialog with new storage info
+                if settings_dialog:
+                    settings_dialog.update_storage_info(self._get_storage_info())
             except Exception as e:
                 QMessageBox.critical(
                     self,
@@ -1321,6 +1328,7 @@ class GPManagerApp(QMainWindow):
 
     def _on_export_backup(self):
         """Handle export backup request from settings dialog."""
+        from datetime import datetime
         from src.views.dialogs.backup_dialogs import ExportBackupDialog
         from secure_storage import export_backup
         from src.views.dialogs.plugin_designer.utils import show_save_file_dialog
@@ -1371,25 +1379,27 @@ class GPManagerApp(QMainWindow):
                         f"Failed to export backup:\n{e}"
                     )
 
-            # Ask for save location using tkinter dialog
+            # Ask for save location with datestamp in default filename
+            datestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"gp_backup_{datestamp}.gpbackup"
+
             show_save_file_dialog(
                 self,
                 "Export Backup",
                 [("GP Backup Files", "*.gpbackup"), ("All Files", "*.*")],
-                "backup.gpbackup",
+                default_filename,
                 on_file_selected,
             )
 
-    def _on_import_backup(self):
+    def _on_import_backup(self, settings_dialog=None):
         """Handle import backup request from settings dialog."""
         from src.views.dialogs.plugin_designer.utils import show_open_file_dialog
 
         def on_file_selected(file_path: str):
             if not file_path:
                 return
-            self._process_import_backup(file_path)
+            self._process_import_backup(file_path, settings_dialog)
 
-        # Ask for file to import using tkinter dialog
         show_open_file_dialog(
             self,
             "Import Backup",
@@ -1397,7 +1407,7 @@ class GPManagerApp(QMainWindow):
             on_file_selected,
         )
 
-    def _process_import_backup(self, file_path: str):
+    def _process_import_backup(self, file_path: str, settings_dialog=None):
         """Process the selected backup file for import."""
         from src.views.dialogs.backup_dialogs import (
             ImportPasswordDialog,
@@ -1499,7 +1509,11 @@ class GPManagerApp(QMainWindow):
             f"Successfully imported {imported_count} card(s) from backup."
         )
 
-    def _on_browse_storage(self):
+        # Update the settings dialog with new storage info
+        if settings_dialog:
+            settings_dialog.update_storage_info(self._get_storage_info())
+
+    def _on_browse_storage(self, settings_dialog=None):
         """Handle browse storage request from settings dialog."""
         from src.views.dialogs.storage_browser_dialog import StorageBrowserDialog
 
@@ -1538,6 +1552,10 @@ class GPManagerApp(QMainWindow):
         dialog.card_deleted.connect(self._on_storage_card_deleted)
 
         dialog.exec_()
+
+        # Update the settings dialog with new storage info (tag count may have changed)
+        if settings_dialog:
+            settings_dialog.update_storage_info(self._get_storage_info())
 
     def _on_storage_card_edited(self, uid: str, card_data: dict):
         """Handle card edit from storage browser."""

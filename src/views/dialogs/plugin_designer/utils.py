@@ -6,6 +6,8 @@ Helper functions for file dialogs and CAP file parsing.
 
 import os
 import re
+import shutil
+import subprocess
 import zipfile
 import tempfile
 import urllib.request
@@ -15,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional, Callable
 
 from PyQt5.QtCore import QTimer, QCoreApplication
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QWidget, QFileDialog
 
 
 @dataclass
@@ -366,15 +368,96 @@ def download_file(url: str, dest_dir: str = None) -> Optional[str]:
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
+def _convert_filetypes_to_qt_filter(filetypes: list) -> str:
+    """
+    Convert tkinter-style filetypes to Qt filter string.
+
+    Args:
+        filetypes: List of (description, pattern) tuples, e.g. [("YAML Files", "*.yaml")]
+
+    Returns:
+        Qt filter string, e.g. "YAML Files (*.yaml);;All Files (*.*)"
+    """
+    filters = []
+    for desc, pattern in filetypes:
+        # Handle patterns like "*.yaml" or "*.yaml *.yml"
+        filters.append(f"{desc} ({pattern})")
+    return ";;".join(filters)
+
+
+def _run_zenity_dialog(dialog_type: str, title: str, filetypes: list, initial_file: str = "") -> Optional[str]:
+    """
+    Run file dialog using zenity (GTK).
+
+    Returns:
+        Selected path, empty string if cancelled, or None if zenity failed to run.
+    """
+    cmd = ["zenity", "--file-selection", f"--title={title}"]
+
+    if dialog_type == "save":
+        cmd.append("--save")
+        cmd.append("--confirm-overwrite")
+        if initial_file:
+            cmd.append(f"--filename={initial_file}")
+
+    # Add file filters
+    for desc, pattern in filetypes:
+        cmd.append(f"--file-filter={desc} | {pattern}")
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        elif result.returncode == 1:
+            # User cancelled
+            return ""
+        else:
+            # Some other error
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def _run_kdialog_dialog(dialog_type: str, title: str, filetypes: list, initial_file: str = "") -> Optional[str]:
+    """
+    Run file dialog using kdialog (KDE).
+
+    Returns:
+        Selected path, empty string if cancelled, or None if kdialog failed to run.
+    """
+    if dialog_type == "open":
+        cmd = ["kdialog", "--getopenfilename", initial_file or ".", f"--title={title}"]
+    else:
+        cmd = ["kdialog", "--getsavefilename", initial_file or ".", f"--title={title}"]
+
+    # kdialog filter format: "Description (*.ext)"
+    if filetypes:
+        filters = " ".join(f"{desc} ({pattern})" for desc, pattern in filetypes)
+        cmd.insert(3, filters)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        elif result.returncode == 1:
+            # User cancelled
+            return ""
+        else:
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
 def run_file_dialog_async(
     dialog_type: str,
     title: str,
     filetypes: list,
     initial_file: str = "",
     callback: Callable[[str], None] = None,
+    parent: QWidget = None,
 ) -> None:
     """
-    Run a file dialog asynchronously using tkinter in a thread.
+    Run a file dialog using native Linux tools (zenity/kdialog) or Qt fallback.
 
     Args:
         dialog_type: "open" or "save"
@@ -382,52 +465,55 @@ def run_file_dialog_async(
         filetypes: List of (description, pattern) tuples
         initial_file: Initial filename for save dialog
         callback: Function to call with result path (or empty string if cancelled)
+        parent: Parent widget for the dialog
     """
-    def run_dialog():
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
+    result = None
 
-            root = tk.Tk()
-            root.withdraw()
+    # Try zenity first (GNOME/GTK)
+    if shutil.which("zenity"):
+        result = _run_zenity_dialog(dialog_type, title, filetypes, initial_file)
+        if result is not None:  # zenity ran successfully (even if user cancelled)
+            if callback:
+                callback(result)
+            return
 
-            # Try to make it appear on top
-            root.lift()
-            root.attributes('-topmost', True)
-            root.after_idle(root.attributes, '-topmost', False)
+    # Try kdialog (KDE)
+    if shutil.which("kdialog"):
+        result = _run_kdialog_dialog(dialog_type, title, filetypes, initial_file)
+        if result is not None:  # kdialog ran successfully (even if user cancelled)
+            if callback:
+                callback(result)
+            return
 
-            if dialog_type == "open":
-                path = filedialog.askopenfilename(
-                    title=title,
-                    filetypes=filetypes,
-                )
-            else:
-                path = filedialog.asksaveasfilename(
-                    title=title,
-                    filetypes=filetypes,
-                    initialfile=initial_file,
-                    defaultextension=filetypes[0][1] if filetypes else "",
-                )
+    # Fallback to Qt dialog
+    result = ""
+    try:
+        qt_filter = _convert_filetypes_to_qt_filter(filetypes)
 
-            root.destroy()
-            return path or ""
+        dialog = QFileDialog(parent)
+        dialog.setWindowTitle(title)
+        dialog.setNameFilter(qt_filter)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
 
-        except Exception as e:
-            print(f"Dialog error: {e}")
-            return ""
+        if dialog_type == "open":
+            dialog.setFileMode(QFileDialog.ExistingFile)
+            dialog.setAcceptMode(QFileDialog.AcceptOpen)
+        else:
+            dialog.setFileMode(QFileDialog.AnyFile)
+            dialog.setAcceptMode(QFileDialog.AcceptSave)
+            if initial_file:
+                dialog.selectFile(initial_file)
 
-    def on_complete(future: Future):
-        result = future.result()
-        if callback:
-            # Schedule callback on Qt main thread
-            QTimer.singleShot(0, lambda: callback(result))
+        if dialog.exec_() == QFileDialog.Accepted:
+            files = dialog.selectedFiles()
+            if files:
+                result = files[0]
 
-    future = _executor.submit(run_dialog)
-    future.add_done_callback(on_complete)
+    except Exception as e:
+        print(f"Dialog error: {e}")
 
-    # Keep Qt responsive while waiting
-    while not future.done():
-        QCoreApplication.processEvents()
+    if callback:
+        callback(result)
 
 
 def show_open_file_dialog(
@@ -437,15 +523,15 @@ def show_open_file_dialog(
     callback: Callable[[str], None],
 ) -> None:
     """
-    Show an open file dialog without blocking the Qt event loop.
+    Show an open file dialog.
 
     Args:
-        parent: Parent widget (unused, for API compatibility)
+        parent: Parent widget for the dialog
         title: Dialog title
         filetypes: List of (description, pattern) tuples
         callback: Called with selected path or empty string
     """
-    run_file_dialog_async("open", title, filetypes, callback=callback)
+    run_file_dialog_async("open", title, filetypes, callback=callback, parent=parent)
 
 
 def show_save_file_dialog(
@@ -456,16 +542,16 @@ def show_save_file_dialog(
     callback: Callable[[str], None],
 ) -> None:
     """
-    Show a save file dialog without blocking the Qt event loop.
+    Show a save file dialog.
 
     Args:
-        parent: Parent widget (unused, for API compatibility)
+        parent: Parent widget for the dialog
         title: Dialog title
         filetypes: List of (description, pattern) tuples
         initial_file: Default filename
         callback: Called with selected path or empty string
     """
-    run_file_dialog_async("save", title, filetypes, initial_file, callback)
+    run_file_dialog_async("save", title, filetypes, initial_file, callback, parent=parent)
 
 
 # Well-known plugin definition filenames (checked in order)
