@@ -5,12 +5,99 @@ import os
 import json
 import base64
 import subprocess
+import uuid
+import time
+from pathlib import Path
+from typing import Optional
 
 import keyring
 import gnupg
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from secrets import token_bytes
+
+
+# Cache timeout values in seconds (None = never cache, 0 = session/forever)
+CACHE_TIMEOUT_OPTIONS = {
+    "never": None,  # Always unlock
+    "30_seconds": 30,
+    "1_minute": 60,
+    "5_minutes": 300,
+    "15_minutes": 900,
+    "30_minutes": 1800,
+    "1_hour": 3600,
+    "session": 0,  # Never expire during session
+}
+
+
+def get_app_data_dir() -> Path:
+    """
+    Get the application data directory for storing config and secure storage.
+
+    - Windows: %APPDATA%/GlobalPlatformGUI
+    - macOS: ~/Library/Application Support/GlobalPlatformGUI
+    - Linux: ~/.local/share/GlobalPlatformGUI
+    """
+    if os.name == "nt":
+        # Windows
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+        app_dir = Path(base) / "GlobalPlatformGUI"
+    elif sys.platform == "darwin":
+        # macOS
+        app_dir = Path.home() / "Library" / "Application Support" / "GlobalPlatformGUI"
+    else:
+        # Linux/Unix
+        xdg_data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+        app_dir = Path(xdg_data) / "GlobalPlatformGUI"
+
+    # Ensure directory exists
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return app_dir
+
+
+def get_default_storage_path() -> str:
+    """Get the default path for the secure storage file."""
+    return str(get_app_data_dir() / "data.enc.json")
+
+
+def get_default_config_path() -> str:
+    """Get the default path for the config file."""
+    return str(get_app_data_dir() / "config.json")
+
+
+def migrate_legacy_files(legacy_dir: str = ".") -> dict:
+    """
+    Migrate legacy files from old location to app data directory.
+
+    Returns dict with migration results.
+    """
+    app_dir = get_app_data_dir()
+    results = {"migrated": [], "skipped": [], "errors": []}
+
+    files_to_migrate = [
+        ("data.enc.json", "data.enc.json"),
+        ("config.json", "config.json"),
+    ]
+
+    for old_name, new_name in files_to_migrate:
+        old_path = Path(legacy_dir) / old_name
+        new_path = app_dir / new_name
+
+        if old_path.exists() and not new_path.exists():
+            try:
+                import shutil
+                shutil.copy2(old_path, new_path)
+                results["migrated"].append(old_name)
+            except Exception as e:
+                results["errors"].append((old_name, str(e)))
+        elif old_path.exists() and new_path.exists():
+            results["skipped"].append(old_name)
+
+    return results
+
+
+# Need sys for platform detection
+import sys
 
 
 class SecureStorage:
@@ -20,6 +107,7 @@ class SecureStorage:
         path: str,
         # gpg_home=os.getcwd(),
         service_name="SecureStorage",
+        cache_timeout: Optional[str] = "never",
     ):
         self.__path = path
         self.__data = None
@@ -31,6 +119,11 @@ class SecureStorage:
         self.__meta: None | dict = None
         self.__persist_key = False
 
+        # Cache settings
+        self._cache_timeout = CACHE_TIMEOUT_OPTIONS.get(cache_timeout)
+        self._cache_timestamp: Optional[float] = None
+        self._cached_data: Optional[dict] = None
+
         try:
             self.__gpg = gnupg.GPG()
         except Exception:
@@ -39,6 +132,38 @@ class SecureStorage:
     @property
     def meta(self):
         return self.__meta
+
+    def set_cache_timeout(self, timeout_key: str):
+        """Set the cache timeout. Use keys from CACHE_TIMEOUT_OPTIONS."""
+        self._cache_timeout = CACHE_TIMEOUT_OPTIONS.get(timeout_key)
+        # Invalidate cache when timeout changes
+        self._invalidate_cache()
+
+    def _invalidate_cache(self):
+        """Clear the cached data."""
+        self._cached_data = None
+        self._cache_timestamp = None
+
+    def _is_cache_valid(self) -> bool:
+        """Check if cached data is still valid."""
+        if self._cached_data is None:
+            return False
+        if self._cache_timeout is None:
+            # "never" - always require unlock
+            return False
+        if self._cache_timeout == 0:
+            # "session" - never expires
+            return True
+        if self._cache_timestamp is None:
+            return False
+        elapsed = time.time() - self._cache_timestamp
+        return elapsed < self._cache_timeout
+
+    def _update_cache(self, data: dict):
+        """Update the cache with new data."""
+        if self._cache_timeout is not None:
+            self._cached_data = data
+            self._cache_timestamp = time.time()
 
     def select_key(self) -> bytes:
         if self.__method == "keyring":
@@ -65,12 +190,25 @@ class SecureStorage:
             self.__method = method["keywrapping"]["method"]
         else:
             self.__method = method
-            self.__key_id = key_id
             self.__aes_key = token_bytes(32)
 
+            # For keyring method, generate a unique key_id if not provided
+            if method == "keyring" and not key_id:
+                key_id = f"storage_{uuid.uuid4().hex[:16]}"
+
+            self.__key_id = key_id
+
         if method == "keyring":
+            # Check if a key already exists with this key_id to prevent accidental overwrite
+            existing = keyring.get_password(self.service_name, self.__key_id)
+            if existing:
+                raise RuntimeError(
+                    f"A keyring entry already exists for '{self.__key_id}'. "
+                    "This may indicate an existing storage file. "
+                    "Use a different key_id or delete the existing entry."
+                )
             keyring.set_password(
-                self.service_name, key_id, base64.b64encode(self.__aes_key).decode()
+                self.service_name, self.__key_id, base64.b64encode(self.__aes_key).decode()
             )
         elif not self.__gpg and method == "gpg":
             # They don't have GPG
@@ -98,7 +236,19 @@ class SecureStorage:
         self.__aes_key = None  # Clear old key reference
         self.initialize(new_method, new_key_id)
 
-    def load(self, retry=False):
+    def load(self, retry=False, force_unlock=False):
+        """
+        Load and decrypt the secure storage.
+
+        Args:
+            retry: Internal flag for GPG retry on failure
+            force_unlock: If True, bypass cache and force decryption
+        """
+        # Check cache first (unless force_unlock is requested)
+        if not force_unlock and self._is_cache_valid():
+            self.__data = self._cached_data
+            return
+
         if not os.path.exists(self.__path):
             raise FileNotFoundError(f"Unable to find {self.__path}")
 
@@ -122,7 +272,8 @@ class SecureStorage:
                 result = gpg_decrypt(wrapped)
             except Exception as e:
                 if not retry:
-                    self.load(retry=True)
+                    self.load(retry=True, force_unlock=force_unlock)
+                    return
                 else:
                     raise RuntimeError(e)
 
@@ -137,6 +288,9 @@ class SecureStorage:
         ciphertext = base64.b64decode(obj["payload"])
         aesgcm = AESGCM(self.__aes_key)
         self.__data = json.loads(aesgcm.decrypt(iv, ciphertext + tag, None))
+
+        # Update cache after successful decrypt
+        self._update_cache(self.__data)
 
         _zero_bytes(self.__aes_key)
         self.__aes_key = None
@@ -154,6 +308,9 @@ class SecureStorage:
         encrypted = aesgcm.encrypt(iv, json_bytes, None)
         _zero_bytes(self.__aes_key)
         self.__aes_key = None
+
+        # Update cache with saved data
+        self._update_cache(self.__data)
 
         tag = encrypted[-16:]
         ciphertext = encrypted[:-16]

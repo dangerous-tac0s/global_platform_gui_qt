@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
     QRadioButton,
     QLineEdit,
     QApplication,
+    QComboBox,
 )
 
 from src.plugins.yaml import set_debug_enabled, is_debug_enabled
@@ -87,11 +88,27 @@ class GeneralTab(QWidget):
         return self._debug_checkbox.isChecked()
 
 
+# Cache timeout display labels (must match keys in secure_storage.CACHE_TIMEOUT_OPTIONS)
+CACHE_TIMEOUT_LABELS = {
+    "never": "Never (always unlock)",
+    "30_seconds": "30 seconds",
+    "1_minute": "1 minute",
+    "5_minutes": "5 minutes",
+    "15_minutes": "15 minutes",
+    "30_minutes": "30 minutes",
+    "1_hour": "1 hour",
+    "session": "Session (until app closes)",
+}
+
+CACHE_TIMEOUT_KEYS = list(CACHE_TIMEOUT_LABELS.keys())
+
+
 class StorageTab(QWidget):
     """Tab for managing secure storage settings."""
 
     reset_storage_requested = pyqtSignal()
     change_method_requested = pyqtSignal()
+    cache_timeout_changed = pyqtSignal(str)  # Emits the timeout key
 
     def __init__(
         self,
@@ -145,6 +162,35 @@ class StorageTab(QWidget):
         status_layout.addWidget(self._status_label)
 
         layout.addWidget(status_group)
+
+        # Cache settings group
+        cache_group = QGroupBox("Cache Settings")
+        cache_layout = QVBoxLayout(cache_group)
+
+        cache_desc = QLabel(
+            "Control how long decrypted storage remains cached in memory.\n"
+            "Longer timeouts reduce GPG unlock prompts but keep data in memory longer."
+        )
+        cache_desc.setStyleSheet("color: #666;")
+        cache_desc.setWordWrap(True)
+        cache_layout.addWidget(cache_desc)
+
+        timeout_layout = QHBoxLayout()
+        timeout_layout.addWidget(QLabel("Cache secure storage for:"))
+        self._cache_timeout_combo = QComboBox()
+        for key in CACHE_TIMEOUT_KEYS:
+            self._cache_timeout_combo.addItem(CACHE_TIMEOUT_LABELS[key], key)
+
+        # Set current value from storage_info
+        current_timeout = self._storage_info.get("cache_timeout", "never")
+        idx = CACHE_TIMEOUT_KEYS.index(current_timeout) if current_timeout in CACHE_TIMEOUT_KEYS else 0
+        self._cache_timeout_combo.setCurrentIndex(idx)
+        self._cache_timeout_combo.currentIndexChanged.connect(self._on_cache_timeout_changed)
+        timeout_layout.addWidget(self._cache_timeout_combo)
+        timeout_layout.addStretch()
+        cache_layout.addLayout(timeout_layout)
+
+        layout.addWidget(cache_group)
 
         # Actions group
         actions_group = QGroupBox("Storage Actions")
@@ -205,6 +251,15 @@ class StorageTab(QWidget):
         )
         if reply == QMessageBox.Yes:
             self.reset_storage_requested.emit()
+
+    def _on_cache_timeout_changed(self, index: int):
+        """Handle cache timeout selection change."""
+        timeout_key = self._cache_timeout_combo.currentData()
+        self.cache_timeout_changed.emit(timeout_key)
+
+    def get_cache_timeout(self) -> str:
+        """Get the selected cache timeout key."""
+        return self._cache_timeout_combo.currentData()
 
     def update_status(self, storage_info: Dict[str, Any]):
         """Update the displayed storage status."""
@@ -946,6 +1001,7 @@ class SettingsDialog(QDialog):
     edit_plugin_requested = pyqtSignal(str)  # yaml_path
     refresh_plugins_requested = pyqtSignal()
     reset_storage_requested = pyqtSignal()
+    cache_timeout_changed = pyqtSignal(str)  # Emits timeout key
 
     def __init__(
         self,
@@ -978,6 +1034,7 @@ class SettingsDialog(QDialog):
         # Storage tab
         self._storage_tab = StorageTab(self._storage_info)
         self._storage_tab.reset_storage_requested.connect(self._on_reset_storage)
+        self._storage_tab.cache_timeout_changed.connect(self._on_cache_timeout_changed)
         tabs.addTab(self._storage_tab, "Storage")
 
         # Plugins tab
@@ -1018,6 +1075,7 @@ class SettingsDialog(QDialog):
     def _save_settings(self):
         """Save settings to config."""
         self._config["disabled_plugins"] = self._plugins_tab.get_disabled_plugins()
+        self._config["cache_timeout"] = self._storage_tab.get_cache_timeout()
 
     def _on_edit_plugin(self, plugin_name: str, yaml_path: str):
         """Handle edit plugin request - open wizard with loaded data."""
@@ -1041,6 +1099,11 @@ class SettingsDialog(QDialog):
     def _on_reset_storage(self):
         """Handle reset storage request - emit to main window."""
         self.reset_storage_requested.emit()
+
+    def _on_cache_timeout_changed(self, timeout_key: str):
+        """Handle cache timeout change - emit to main window."""
+        self.cache_timeout_changed.emit(timeout_key)
+        self._on_changes_made()
 
     def update_storage_info(self, storage_info: Dict[str, Any]):
         """Update the storage tab with new info."""

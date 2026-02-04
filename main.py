@@ -46,7 +46,14 @@ from cryptography.exceptions import InvalidTag
 from dialogs.hex_input_dialog import HexInputDialog
 from src.threads import FileHandlerThread, NFCHandlerThread, resource_path, DEFAULT_KEY
 from src.threads.plugin_fetch_thread import PluginFetchThread
-from secure_storage import SecureStorage
+from secure_storage import (
+    SecureStorage,
+    get_app_data_dir,
+    get_default_storage_path,
+    get_default_config_path,
+    migrate_legacy_files,
+    CACHE_TIMEOUT_OPTIONS,
+)
 
 # MVC imports
 from src.controllers import CardController
@@ -69,10 +76,14 @@ from src.views.dialogs.plugin_designer import PluginDesignerWizard
 class ElidingLabel(QLabel):
     """A QLabel that elides text when it doesn't fit the available width."""
 
+    # Vertical padding for cross-platform font rendering compatibility
+    VERTICAL_PADDING = 4
+
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
         self._full_text = text
         self.setToolTip(text)
+        self._update_minimum_height()
 
     def setText(self, text):
         self._full_text = text
@@ -82,6 +93,28 @@ class ElidingLabel(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_elided_text()
+
+    def changeEvent(self, event):
+        """Handle font changes to update minimum height and re-elide text."""
+        super().changeEvent(event)
+        if event.type() == QEvent.FontChange:
+            self._update_minimum_height()
+            self._update_elided_text()
+
+    def _update_minimum_height(self):
+        """Update minimum height based on current font metrics."""
+        self.ensurePolished()  # Ensure stylesheet font is applied
+        fm = QFontMetrics(self.font())
+        min_height = fm.height() + self.VERTICAL_PADDING
+        self.setMinimumHeight(min_height)
+
+    def sizeHint(self):
+        """Return preferred size based on font metrics."""
+        self.ensurePolished()  # Ensure stylesheet font is applied
+        fm = QFontMetrics(self.font())
+        width = fm.horizontalAdvance(self._full_text) if self._full_text else 100
+        height = fm.height() + self.VERTICAL_PADDING
+        return QSize(min(width, 400), height)
 
     def _update_elided_text(self):
         fm = QFontMetrics(self.font())
@@ -265,6 +298,7 @@ DEFAULT_CONFIG = {
     "cache_latest_release": False,
     "last_checked": {},
     "known_tags": {},
+    "cache_timeout": "never",  # Cache timeout for secure storage unlock
     "window": {
         "height": WIDTH_HEIGHT[1],
         "width": WIDTH_HEIGHT[0],
@@ -286,7 +320,13 @@ DEFAULT_DATA_FILE = {
     "data": DEFAULT_DATA,
 }
 
-DATA_FILE = "data.enc.json"
+# Use app data directory for secure storage and config
+DATA_FILE = get_default_storage_path()
+CONFIG_FILE = get_default_config_path()
+
+# Legacy paths for migration
+LEGACY_DATA_FILE = "data.enc.json"
+LEGACY_CONFIG_FILE = "config.json"
 
 #
 # Folder for caching .cap downloads
@@ -451,6 +491,10 @@ class GPManagerApp(QMainWindow):
 
         self.config = self.load_config()
         self.write_config()
+
+        # Apply cache timeout from config to secure storage instance
+        cache_timeout = self.config.get("cache_timeout", "never")
+        self.secure_storage_instance.set_cache_timeout(cache_timeout)
 
         # Initialize debug logging from config
         from src.plugins.yaml import set_debug_enabled
@@ -829,7 +873,11 @@ class GPManagerApp(QMainWindow):
         app_version = self._get_version_for_cap(app_name) if is_installed else None
         app_title = f"{display_name} (v{app_version})" if app_version else display_name
         app_name_label = ElidingLabel(app_title)
-        app_name_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        # Use explicit QFont for reliable cross-platform sizing
+        app_font = QFont()
+        app_font.setPointSize(14)  # ~18px, using points for DPI independence
+        app_font.setBold(True)
+        app_name_label.setFont(app_font)
         app_name_label.setMinimumWidth(100)
         app_name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         content_layout.addWidget(app_name_label)
@@ -839,7 +887,11 @@ class GPManagerApp(QMainWindow):
         if plugin_info:
             plugin_name = plugin_info[0]
             plugin_name_label = QLabel(f"Plugin: {plugin_name}")
-            plugin_name_label.setStyleSheet("font-size: 13px; color: #666;")
+            # Use explicit QFont for reliable cross-platform sizing
+            plugin_font = QFont()
+            plugin_font.setPointSize(10)  # ~13px, using points for DPI independence
+            plugin_name_label.setFont(plugin_font)
+            plugin_name_label.setStyleSheet("color: #666;")
             plugin_name_label.setWordWrap(False)
             content_layout.addWidget(plugin_name_label)
 
@@ -1179,6 +1231,7 @@ class GPManagerApp(QMainWindow):
         dialog = SettingsDialog(self.plugin_map, self.config, storage_info, self)
         dialog.refresh_plugins_requested.connect(self._refresh_plugins_after_settings)
         dialog.reset_storage_requested.connect(self._on_settings_reset_storage)
+        dialog.cache_timeout_changed.connect(self._on_cache_timeout_changed)
 
         if dialog.exec_() == dialog.Accepted:
             # Update config with settings
@@ -1199,6 +1252,7 @@ class GPManagerApp(QMainWindow):
             "is_loaded": self.secure_storage is not None,
             "method": "Unknown",
             "tag_count": 0,
+            "cache_timeout": self.config.get("cache_timeout", "never"),
         }
 
         if self.secure_storage_instance and self.secure_storage_instance.meta:
@@ -1216,6 +1270,13 @@ class GPManagerApp(QMainWindow):
         """Handle reset storage request from settings dialog."""
         self._backup_and_create_new_storage()
         self._update_storage_menu_state()
+
+    def _on_cache_timeout_changed(self, timeout_key: str):
+        """Handle cache timeout change from settings dialog."""
+        self.config["cache_timeout"] = timeout_key
+        if self.secure_storage_instance:
+            self.secure_storage_instance.set_cache_timeout(timeout_key)
+        self.write_config()
 
     def _refresh_plugins_after_settings(self):
         """Reload plugins after settings changes (add/edit/delete)."""
@@ -2638,15 +2699,25 @@ class GPManagerApp(QMainWindow):
         # from src.services.config_service import ConfigService
         # self._config_service = ConfigService()
         # return self._config_service.load().to_dict()
-        if os.path.exists("config.json"):
-            with open("config.json", "r") as fh:
+
+        # Migrate legacy files from working directory to app data directory
+        if os.path.exists(LEGACY_CONFIG_FILE) and not os.path.exists(CONFIG_FILE):
+            migration_result = migrate_legacy_files()
+            if migration_result["migrated"]:
+                self.message_queue.add_message(
+                    f"Migrated files to app data: {', '.join(migration_result['migrated'])}"
+                )
+
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r") as fh:
                 try:
                     config = json.load(fh)
                 except Exception as e:
                     self.show_error_dialog("Config file is invalid. Creating new one.")
                     fh.close()
                     # Maybe they want to see about salvaging the config?
-                    os.rename("config.json", f"config-{int(time.time())}-.broken.json")
+                    broken_path = str(get_app_data_dir() / f"config-{int(time.time())}-.broken.json")
+                    os.rename(CONFIG_FILE, broken_path)
                     config = DEFAULT_CONFIG
 
             # Did I update something? Let's make sure the config is updated.
@@ -2657,14 +2728,14 @@ class GPManagerApp(QMainWindow):
             return config
         else:
             # create default
-            with open("config.json", "w") as fh:
+            with open(CONFIG_FILE, "w") as fh:
                 json.dump(DEFAULT_CONFIG, fh, indent=4)
 
             return DEFAULT_CONFIG
 
     def write_config(self):
         # Future: migrate to ConfigService.save()
-        with open("config.json", "w") as fh:
+        with open(CONFIG_FILE, "w") as fh:
             json.dump(self.config, fh, indent=4)
 
     def update_known_tags(self, uid: str, default_key: bool | str):
