@@ -477,9 +477,9 @@ PLUGIN_DEFINITION_FILENAMES = [
 ]
 
 
-def fetch_github_plugin_definition(owner: str, repo: str, branch: str = "") -> Optional[tuple[str, dict]]:
+def fetch_github_plugin_definition(owner: str, repo: str, branch: str = "") -> list[tuple[str, dict]]:
     """
-    Check if a GitHub repository provides a GP GUI plugin definition.
+    Check if a GitHub repository provides GP GUI plugin definitions.
 
     Looks for well-known plugin definition files in the repo root:
     - gp-plugin.yaml / gp-plugin.yml
@@ -491,10 +491,12 @@ def fetch_github_plugin_definition(owner: str, repo: str, branch: str = "") -> O
         branch: Branch to check (defaults to repo's default branch)
 
     Returns:
-        Tuple of (filename, parsed_yaml_dict) if found, None otherwise
+        List of (filename, parsed_yaml_dict) tuples for all found plugin definitions
     """
     import json
     import yaml
+
+    results = []
 
     # First get the default branch if not specified
     if not branch:
@@ -524,7 +526,7 @@ def fetch_github_plugin_definition(owner: str, repo: str, branch: str = "") -> O
             plugin_data = yaml.safe_load(content)
 
             if isinstance(plugin_data, dict):
-                return (filename, plugin_data)
+                results.append((filename, plugin_data))
 
         except urllib.error.HTTPError as e:
             if e.code == 404:
@@ -534,12 +536,12 @@ def fetch_github_plugin_definition(owner: str, repo: str, branch: str = "") -> O
         except Exception:
             continue
 
-    return None
+    return results
 
 
-def fetch_github_release_plugin_definition(owner: str, repo: str, tag: str = "") -> Optional[tuple[str, dict]]:
+def fetch_github_release_plugin_definition(owner: str, repo: str, tag: str = "") -> list[tuple[str, dict]]:
     """
-    Check if a GitHub release contains a plugin definition file.
+    Check if a GitHub release contains plugin definition files.
 
     Looks for *.gp-plugin.yaml or gp-plugin.yaml in release assets.
 
@@ -549,10 +551,12 @@ def fetch_github_release_plugin_definition(owner: str, repo: str, tag: str = "")
         tag: Release tag (uses latest if empty)
 
     Returns:
-        Tuple of (filename, parsed_yaml_dict) if found, None otherwise
+        List of (filename, parsed_yaml_dict) tuples for all found plugin definitions
     """
     import json
     import yaml
+
+    results = []
 
     if tag:
         api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
@@ -576,18 +580,21 @@ def fetch_github_release_plugin_definition(owner: str, repo: str, tag: str = "")
                name == 'gp-plugin.yaml' or name == 'gp-plugin.yml':
                 download_url = asset.get('browser_download_url', '')
                 if download_url:
-                    # Download and parse
-                    req = urllib.request.Request(download_url)
-                    req.add_header('User-Agent', 'GlobalPlatformGUI')
+                    try:
+                        # Download and parse
+                        req = urllib.request.Request(download_url)
+                        req.add_header('User-Agent', 'GlobalPlatformGUI')
 
-                    with urllib.request.urlopen(req, timeout=30) as response:
-                        content = response.read().decode('utf-8')
+                        with urllib.request.urlopen(req, timeout=30) as response:
+                            content = response.read().decode('utf-8')
 
-                    plugin_data = yaml.safe_load(content)
-                    if isinstance(plugin_data, dict):
-                        return (name, plugin_data)
+                        plugin_data = yaml.safe_load(content)
+                        if isinstance(plugin_data, dict):
+                            results.append((name, plugin_data))
+                    except Exception:
+                        continue  # Skip this asset, try others
 
     except Exception:
         pass
 
-    return None
+    return results

@@ -53,7 +53,7 @@ class SourceConfigPage(QWizardPage):
         # For multiple CAPs: {filename: {"url": str, "metadata": CapMetadata}}
         self._available_caps = {}
         self._source_validated = False  # Track if source has been validated
-        self._discovered_plugin = None  # (filename, plugin_data) if found
+        self._discovered_plugins = []  # List of (filename, plugin_data) tuples
         self._setup_ui()
 
     def _setup_ui(self):
@@ -200,10 +200,16 @@ class SourceConfigPage(QWizardPage):
         self._plugin_found_label.setWordWrap(True)
         plugin_found_layout.addWidget(self._plugin_found_label)
 
+        # List widget for multiple plugin definitions
+        self._plugin_found_list = QListWidget()
+        self._plugin_found_list.setMaximumHeight(100)
+        self._plugin_found_list.itemChanged.connect(self._on_plugin_selection_changed)
+        plugin_found_layout.addWidget(self._plugin_found_list)
+
         plugin_btn_layout = QHBoxLayout()
-        self._import_plugin_btn = QPushButton("Import Plugin Definition")
+        self._import_plugin_btn = QPushButton("Import Selected")
         self._import_plugin_btn.setMinimumWidth(170)  # Ensure text visible on Windows
-        self._import_plugin_btn.clicked.connect(self._import_discovered_plugin)
+        self._import_plugin_btn.clicked.connect(self._import_discovered_plugins)
         plugin_btn_layout.addWidget(self._import_plugin_btn)
 
         self._skip_plugin_btn = QPushButton("Continue Manually")
@@ -247,7 +253,7 @@ class SourceConfigPage(QWizardPage):
         # This is connected to the path/URL fields, not pattern
         self._source_validated = False
         self._available_caps.clear()
-        self._discovered_plugin = None
+        self._discovered_plugins = []
         # Hide CAP list if visible (for GitHub)
         self._cap_list.hide()
         self._cap_list_label.hide()
@@ -256,6 +262,7 @@ class SourceConfigPage(QWizardPage):
         self._fetch_selected_btn.hide()
         # Hide plugin discovery notification
         self._plugin_found_group.hide()
+        self._plugin_found_list.clear()
         self.completeChanged.emit()
 
     def _on_cap_selection_changed(self, item):
@@ -490,24 +497,45 @@ class SourceConfigPage(QWizardPage):
                     self.completeChanged.emit()
                 return
 
-            # Check for plugin definition in repo or release
-            self._discovered_plugin = None
+            # Check for plugin definitions in repo and release
+            self._discovered_plugins = []
             self._plugin_found_group.hide()
+            self._plugin_found_list.clear()
 
-            # Try repo root first, then release assets
-            plugin_def = fetch_github_plugin_definition(owner, repo)
-            if not plugin_def:
-                plugin_def = fetch_github_release_plugin_definition(owner, repo, tag)
+            # Collect from repo root and release assets
+            repo_plugins = fetch_github_plugin_definition(owner, repo)
+            release_plugins = fetch_github_release_plugin_definition(owner, repo, tag)
 
-            if plugin_def:
-                filename, plugin_data = plugin_def
-                self._discovered_plugin = plugin_def
-                plugin_name = plugin_data.get("name", plugin_data.get("applet", {}).get("name", "Unknown"))
-                self._plugin_found_label.setText(
-                    f"This repository provides a plugin definition ({filename}).\n"
-                    f"Plugin: {plugin_name}\n\n"
-                    "You can import it directly or continue configuring manually."
-                )
+            # Combine and deduplicate by filename
+            seen_filenames = set()
+            for filename, plugin_data in repo_plugins + release_plugins:
+                if filename not in seen_filenames:
+                    seen_filenames.add(filename)
+                    self._discovered_plugins.append((filename, plugin_data))
+
+            if self._discovered_plugins:
+                count = len(self._discovered_plugins)
+                if count == 1:
+                    self._plugin_found_label.setText(
+                        "This repository provides a plugin definition:"
+                    )
+                    self._plugin_found_group.setTitle("Plugin Definition Found")
+                else:
+                    self._plugin_found_label.setText(
+                        f"This repository provides {count} plugin definitions:"
+                    )
+                    self._plugin_found_group.setTitle(f"Plugin Definitions Found ({count})")
+
+                # Populate list with checkable items
+                for filename, plugin_data in self._discovered_plugins:
+                    plugin_name = plugin_data.get("name", plugin_data.get("plugin", {}).get("name", "Unknown"))
+                    item = QListWidgetItem(f"{plugin_name} ({filename})")
+                    item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                    item.setCheckState(Qt.Checked)
+                    item.setData(Qt.UserRole, (filename, plugin_data))
+                    self._plugin_found_list.addItem(item)
+
+                self._update_import_button_text()
                 self._plugin_found_group.show()
 
             # Fetch ALL release assets matching pattern
@@ -719,41 +747,73 @@ class SourceConfigPage(QWizardPage):
         """Get the extracted CAP metadata for use by other pages."""
         return self._cap_metadata
 
-    def _import_discovered_plugin(self):
-        """Import the discovered plugin definition directly."""
-        if not self._discovered_plugin:
+    def _on_plugin_selection_changed(self, item):
+        """Handle plugin checkbox selection changes."""
+        self._update_import_button_text()
+
+    def _update_import_button_text(self):
+        """Update the import button text to show count of selected plugins."""
+        checked_count = sum(
+            1 for i in range(self._plugin_found_list.count())
+            if self._plugin_found_list.item(i).checkState() == Qt.Checked
+        )
+        if checked_count == 0:
+            self._import_plugin_btn.setText("Import Selected")
+            self._import_plugin_btn.setEnabled(False)
+        elif checked_count == 1:
+            self._import_plugin_btn.setText("Import Selected")
+            self._import_plugin_btn.setEnabled(True)
+        else:
+            self._import_plugin_btn.setText(f"Import Selected ({checked_count})")
+            self._import_plugin_btn.setEnabled(True)
+
+    def _import_discovered_plugins(self):
+        """Import the selected plugin definitions."""
+        # Collect checked plugins
+        selected_plugins = []
+        for i in range(self._plugin_found_list.count()):
+            item = self._plugin_found_list.item(i)
+            if item.checkState() == Qt.Checked:
+                plugin_data = item.data(Qt.UserRole)
+                if plugin_data:
+                    selected_plugins.append(plugin_data)
+
+        if not selected_plugins:
             return
 
-        filename, plugin_data = self._discovered_plugin
         wizard = self.wizard()
         if not wizard:
             return
 
-        # Store the plugin data for the wizard to use
-        wizard.set_plugin_data("_imported_plugin", plugin_data)
-        wizard.set_plugin_data("_imported_plugin_filename", filename)
+        # Build confirmation message
+        plugin_names = []
+        for filename, plugin_data in selected_plugins:
+            name = plugin_data.get("name", plugin_data.get("plugin", {}).get("name", filename))
+            plugin_names.append(name)
 
-        # Show confirmation and close wizard with accept
-        from PyQt5.QtWidgets import QMessageBox
-        plugin_name = plugin_data.get("name", plugin_data.get("applet", {}).get("name", "Unknown"))
+        if len(selected_plugins) == 1:
+            message = f"Import plugin '{plugin_names[0]}'?\n\nThis will save the plugin and close the wizard."
+        else:
+            names_list = "\n".join(f"  • {name}" for name in plugin_names)
+            message = f"Import {len(selected_plugins)} plugins?\n\n{names_list}\n\nThis will save the plugins and close the wizard."
 
         reply = QMessageBox.question(
             self,
-            "Import Plugin",
-            f"Import plugin '{plugin_name}' from {filename}?\n\n"
-            "This will save the plugin and close the wizard.",
+            "Import Plugins",
+            message,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
 
         if reply == QMessageBox.Yes:
-            # Signal wizard to import and close
-            wizard.import_plugin_definition(plugin_data, filename)
+            # Import all selected plugins
+            wizard.import_plugin_definitions(selected_plugins)
 
     def _skip_discovered_plugin(self):
-        """Skip the discovered plugin and continue manually."""
+        """Skip the discovered plugins and continue manually."""
         self._plugin_found_group.hide()
-        self._discovered_plugin = None
+        self._plugin_found_list.clear()
+        self._discovered_plugins = []
 
     def validatePage(self) -> bool:
         """Validate and save data."""

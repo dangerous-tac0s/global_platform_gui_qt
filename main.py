@@ -298,7 +298,7 @@ DEFAULT_CONFIG = {
     "cache_latest_release": False,
     "last_checked": {},
     "known_tags": {},
-    "cache_timeout": "never",  # Cache timeout for secure storage unlock
+    "cache_timeout": "session",  # Cache timeout for secure storage unlock
     "window": {
         "height": WIDTH_HEIGHT[1],
         "width": WIDTH_HEIGHT[0],
@@ -493,7 +493,7 @@ class GPManagerApp(QMainWindow):
         self.write_config()
 
         # Apply cache timeout from config to secure storage instance
-        cache_timeout = self.config.get("cache_timeout", "never")
+        cache_timeout = self.config.get("cache_timeout", "session")
         self.secure_storage_instance.set_cache_timeout(cache_timeout)
 
         # Initialize debug logging from config
@@ -1231,12 +1231,19 @@ class GPManagerApp(QMainWindow):
         dialog = SettingsDialog(self.plugin_map, self.config, storage_info, self)
         dialog.refresh_plugins_requested.connect(self._refresh_plugins_after_settings)
         dialog.reset_storage_requested.connect(self._on_settings_reset_storage)
+        dialog.change_method_requested.connect(self._on_change_encryption_method)
+        dialog.export_backup_requested.connect(self._on_export_backup)
+        dialog.import_backup_requested.connect(self._on_import_backup)
+        dialog.browse_storage_requested.connect(self._on_browse_storage)
         dialog.cache_timeout_changed.connect(self._on_cache_timeout_changed)
 
         if dialog.exec_() == dialog.Accepted:
             # Update config with settings
             self.config = dialog.get_config()
             self.write_config()
+
+            # Refresh the Available Apps list to reflect enabled/disabled plugins
+            self.populate_available_list()
 
             if dialog.needs_restart():
                 QMessageBox.information(
@@ -1252,13 +1259,13 @@ class GPManagerApp(QMainWindow):
             "is_loaded": self.secure_storage is not None,
             "method": "Unknown",
             "tag_count": 0,
-            "cache_timeout": self.config.get("cache_timeout", "never"),
+            "cache_timeout": self.config.get("cache_timeout", "session"),
         }
 
-        if self.secure_storage_instance and self.secure_storage_instance.meta:
-            meta = self.secure_storage_instance.meta
-            if "keywrapping" in meta and "method" in meta["keywrapping"]:
-                info["method"] = meta["keywrapping"]["method"]
+        if self.secure_storage_instance:
+            method = self.secure_storage_instance.get_method()
+            if method:
+                info["method"] = method
 
         if self.secure_storage:
             tags = self.secure_storage.get("tags", {})
@@ -1278,12 +1285,321 @@ class GPManagerApp(QMainWindow):
             self.secure_storage_instance.set_cache_timeout(timeout_key)
         self.write_config()
 
+    def _on_change_encryption_method(self):
+        """Handle change encryption method request from settings dialog."""
+        from src.views.dialogs.backup_dialogs import ChangeEncryptionDialog
+
+        if not self.secure_storage_instance:
+            QMessageBox.warning(
+                self,
+                "Storage Not Loaded",
+                "Please unlock storage first before changing the encryption method."
+            )
+            return
+
+        current_method = self.secure_storage_instance.get_method()
+        gpg_available = self.secure_storage_instance._SecureStorage__gpg is not None
+
+        dialog = ChangeEncryptionDialog(self, current_method, gpg_available)
+        if dialog.exec_() == dialog.Accepted:
+            new_method = dialog.get_method()
+            new_key_id = dialog.get_gpg_key_id() if new_method == "gpg" else None
+
+            try:
+                self.secure_storage_instance.change_method(new_method, new_key_id)
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Encryption method changed to {new_method}."
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to change encryption method:\n{e}"
+                )
+
+    def _on_export_backup(self):
+        """Handle export backup request from settings dialog."""
+        from src.views.dialogs.backup_dialogs import ExportBackupDialog
+        from secure_storage import export_backup
+        from src.views.dialogs.plugin_designer.utils import show_save_file_dialog
+
+        if not self.secure_storage:
+            QMessageBox.warning(
+                self,
+                "No Data",
+                "No storage data to export. Please unlock storage first."
+            )
+            return
+
+        gpg_available = (
+            self.secure_storage_instance and
+            self.secure_storage_instance._SecureStorage__gpg is not None
+        )
+
+        dialog = ExportBackupDialog(self, gpg_available)
+        if dialog.exec_() == dialog.Accepted:
+            method = dialog.get_method()
+            password = dialog.get_password() if method == "password" else None
+            gpg_key_id = dialog.get_gpg_key_id() if method == "gpg" else None
+
+            def on_file_selected(file_path: str):
+                if not file_path:
+                    return
+
+                if not file_path.endswith(".gpbackup"):
+                    file_path += ".gpbackup"
+
+                try:
+                    export_backup(
+                        self.secure_storage,
+                        file_path,
+                        method,
+                        password=password,
+                        gpg_key_id=gpg_key_id,
+                    )
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        f"Backup exported to:\n{file_path}"
+                    )
+                except Exception as e:
+                    QMessageBox.critical(
+                        self,
+                        "Export Failed",
+                        f"Failed to export backup:\n{e}"
+                    )
+
+            # Ask for save location using tkinter dialog
+            show_save_file_dialog(
+                self,
+                "Export Backup",
+                [("GP Backup Files", "*.gpbackup"), ("All Files", "*.*")],
+                "backup.gpbackup",
+                on_file_selected,
+            )
+
+    def _on_import_backup(self):
+        """Handle import backup request from settings dialog."""
+        from src.views.dialogs.plugin_designer.utils import show_open_file_dialog
+
+        def on_file_selected(file_path: str):
+            if not file_path:
+                return
+            self._process_import_backup(file_path)
+
+        # Ask for file to import using tkinter dialog
+        show_open_file_dialog(
+            self,
+            "Import Backup",
+            [("GP Backup Files", "*.gpbackup"), ("All Files", "*.*")],
+            on_file_selected,
+        )
+
+    def _process_import_backup(self, file_path: str):
+        """Process the selected backup file for import."""
+        from src.views.dialogs.backup_dialogs import (
+            ImportPasswordDialog,
+            ConflictResolutionDialog,
+        )
+        from secure_storage import import_backup, get_backup_info
+
+        try:
+            backup_info = get_backup_info(file_path)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Invalid Backup",
+                f"Failed to read backup file:\n{e}"
+            )
+            return
+
+        # Get password if needed
+        password = None
+        if backup_info.get("method") == "password":
+            dialog = ImportPasswordDialog(self, backup_info)
+            if dialog.exec_() != dialog.Accepted:
+                return
+            password = dialog.get_password()
+
+        # Decrypt backup
+        try:
+            backup_data = import_backup(file_path, password)
+        except RuntimeError as e:
+            QMessageBox.critical(
+                self,
+                "Decryption Failed",
+                str(e)
+            )
+            return
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Import Failed",
+                f"Failed to import backup:\n{e}"
+            )
+            return
+
+        # Check for conflicts
+        if self.secure_storage:
+            existing_tags = self.secure_storage.get("tags", {})
+            backup_tags = backup_data.get("tags", {})
+
+            conflicts = []
+            for uid, backup_entry in backup_tags.items():
+                if uid in existing_tags:
+                    conflicts.append({
+                        "uid": uid,
+                        "existing_name": existing_tags[uid].get("name", "Unnamed"),
+                        "backup_name": backup_entry.get("name", "Unnamed"),
+                    })
+
+            if conflicts:
+                dialog = ConflictResolutionDialog(self, conflicts)
+                if dialog.exec_() != dialog.Accepted:
+                    return
+                resolutions = dialog.get_resolutions()
+
+                # Apply resolutions
+                for uid, resolution in resolutions.items():
+                    if resolution == ConflictResolutionDialog.KEEP_EXISTING:
+                        # Don't import this entry
+                        del backup_tags[uid]
+                    elif resolution == ConflictResolutionDialog.USE_BACKUP:
+                        # Will be merged below
+                        pass
+                    elif resolution == ConflictResolutionDialog.SKIP:
+                        # Don't import and don't modify existing
+                        del backup_tags[uid]
+
+            # Merge backup data into existing storage
+            for uid, entry in backup_tags.items():
+                self.secure_storage.setdefault("tags", {})[uid] = entry
+
+            # Save merged data
+            if self.secure_storage_instance:
+                self.secure_storage_instance.set_data(self.secure_storage)
+                self.secure_storage_instance.save()
+        else:
+            # No existing storage, use backup data directly
+            self.secure_storage = backup_data
+            # Need to initialize storage first
+            QMessageBox.information(
+                self,
+                "Import Complete",
+                "Backup data imported. Please unlock storage to save the data."
+            )
+            return
+
+        imported_count = len(backup_data.get("tags", {}))
+        QMessageBox.information(
+            self,
+            "Import Complete",
+            f"Successfully imported {imported_count} card(s) from backup."
+        )
+
+    def _on_browse_storage(self):
+        """Handle browse storage request from settings dialog."""
+        from src.views.dialogs.storage_browser_dialog import StorageBrowserDialog
+
+        if not self.secure_storage:
+            QMessageBox.information(
+                self,
+                "No Storage",
+                "No cards are stored yet. Cards will be saved when you scan them."
+            )
+            return
+
+        # Convert storage data to list format for dialog
+        tags = self.secure_storage.get("tags", {})
+        cards = []
+        for uid, data in tags.items():
+            card = {
+                "uid": uid,
+                "name": data.get("name", ""),
+            }
+            # Support both single key and separate keys (SCP03)
+            if "enc_key" in data:
+                card["enc_key"] = data.get("enc_key", "")
+                card["mac_key"] = data.get("mac_key", "")
+                card["dek_key"] = data.get("dek_key", "")
+            else:
+                card["key"] = data.get("key", "")
+            cards.append(card)
+
+        # Sort by name
+        cards.sort(key=lambda c: (c["name"] or "").lower())
+
+        dialog = StorageBrowserDialog(self, cards=cards)
+
+        # Connect signals for persistence
+        dialog.card_edited.connect(self._on_storage_card_edited)
+        dialog.card_deleted.connect(self._on_storage_card_deleted)
+
+        dialog.exec_()
+
+    def _on_storage_card_edited(self, uid: str, card_data: dict):
+        """Handle card edit from storage browser."""
+        if not self.secure_storage:
+            return
+
+        tags = self.secure_storage.setdefault("tags", {})
+
+        # Build the entry to save
+        entry = {"name": card_data.get("name", "")}
+
+        # Support both single key and separate keys (SCP03)
+        if "enc_key" in card_data:
+            entry["enc_key"] = card_data.get("enc_key", "")
+            entry["mac_key"] = card_data.get("mac_key", "")
+            entry["dek_key"] = card_data.get("dek_key", "")
+            # Remove old single key if switching to separate keys
+            if uid in tags and "key" in tags[uid]:
+                del tags[uid]["key"]
+        else:
+            entry["key"] = card_data.get("key", "")
+            # Remove old separate keys if switching to single key
+            if uid in tags:
+                for k in ["enc_key", "mac_key", "dek_key"]:
+                    if k in tags[uid]:
+                        del tags[uid][k]
+
+        # Update or create entry
+        if uid in tags:
+            tags[uid].update(entry)
+        else:
+            tags[uid] = entry
+
+        # Save changes
+        if self.secure_storage_instance:
+            self.secure_storage_instance.set_data(self.secure_storage)
+            self.secure_storage_instance.save()
+
+    def _on_storage_card_deleted(self, uid: str):
+        """Handle card deletion from storage browser."""
+        if not self.secure_storage:
+            return
+
+        tags = self.secure_storage.get("tags", {})
+        if uid in tags:
+            del tags[uid]
+
+        # Save changes
+        if self.secure_storage_instance:
+            self.secure_storage_instance.set_data(self.secure_storage)
+            self.secure_storage_instance.save()
+
     def _refresh_plugins_after_settings(self):
         """Reload plugins after settings changes (add/edit/delete)."""
         # Reload plugin map
         self.plugin_map = load_plugins()
         if self.plugin_map:
             print("Reloaded plugins:", list(self.plugin_map.keys()))
+
+        # Also save config to persist any changes (disabled/hidden plugins)
+        self.write_config()
+
         # Refresh available apps info and UI lists
         self.update_plugin_releases()
 

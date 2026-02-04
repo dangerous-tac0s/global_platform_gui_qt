@@ -27,9 +27,12 @@ if [ ! -f "$APPIMAGETOOL" ]; then
     chmod +x "$APPIMAGETOOL"
 fi
 
-# Clean previous builds
+# Clean previous builds and Python cache
 echo "Cleaning previous builds..."
 rm -rf "$BUILD_DIR/gp_gui" "$APPDIR" "$BUILD_DIR"/*.AppImage
+echo "Clearing Python cache..."
+find "$PROJECT_ROOT" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "$PROJECT_ROOT" -name "*.pyc" -delete 2>/dev/null || true
 
 # Run PyInstaller
 echo "Running PyInstaller..."

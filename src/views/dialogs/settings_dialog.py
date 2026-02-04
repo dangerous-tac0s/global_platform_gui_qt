@@ -108,6 +108,9 @@ class StorageTab(QWidget):
 
     reset_storage_requested = pyqtSignal()
     change_method_requested = pyqtSignal()
+    export_backup_requested = pyqtSignal()
+    import_backup_requested = pyqtSignal()
+    browse_storage_requested = pyqtSignal()
     cache_timeout_changed = pyqtSignal(str)  # Emits the timeout key
 
     def __init__(
@@ -161,6 +164,19 @@ class StorageTab(QWidget):
         self._status_label.setStyleSheet(status_color)
         status_layout.addWidget(self._status_label)
 
+        # Change encryption method button
+        status_layout.addSpacing(10)
+        change_method_layout = QHBoxLayout()
+        change_method_btn = QPushButton("Change Encryption Method...")
+        change_method_btn.setToolTip(
+            "Switch between System Keyring and GPG encryption methods.\n"
+            "This will re-encrypt all stored data."
+        )
+        change_method_btn.clicked.connect(self._on_change_method_clicked)
+        change_method_layout.addWidget(change_method_btn)
+        change_method_layout.addStretch()
+        status_layout.addLayout(change_method_layout)
+
         layout.addWidget(status_group)
 
         # Cache settings group
@@ -182,7 +198,7 @@ class StorageTab(QWidget):
             self._cache_timeout_combo.addItem(CACHE_TIMEOUT_LABELS[key], key)
 
         # Set current value from storage_info
-        current_timeout = self._storage_info.get("cache_timeout", "never")
+        current_timeout = self._storage_info.get("cache_timeout", "session")
         idx = CACHE_TIMEOUT_KEYS.index(current_timeout) if current_timeout in CACHE_TIMEOUT_KEYS else 0
         self._cache_timeout_combo.setCurrentIndex(idx)
         self._cache_timeout_combo.currentIndexChanged.connect(self._on_cache_timeout_changed)
@@ -192,9 +208,56 @@ class StorageTab(QWidget):
 
         layout.addWidget(cache_group)
 
+        # Backup & Restore group
+        backup_group = QGroupBox("Backup & Restore")
+        backup_layout = QVBoxLayout(backup_group)
+
+        backup_desc = QLabel(
+            "Create encrypted backups or restore from previous backups."
+        )
+        backup_desc.setStyleSheet("color: #666;")
+        backup_desc.setWordWrap(True)
+        backup_layout.addWidget(backup_desc)
+
+        backup_btn_layout = QHBoxLayout()
+        export_btn = QPushButton("Export Backup...")
+        export_btn.setToolTip(
+            "Export your saved keys to an encrypted backup file.\n"
+            "Choose between password or GPG encryption."
+        )
+        export_btn.clicked.connect(self._on_export_clicked)
+        backup_btn_layout.addWidget(export_btn)
+
+        import_btn = QPushButton("Import Backup...")
+        import_btn.setToolTip(
+            "Import keys from a previously exported backup file.\n"
+            "Conflicts will be resolved interactively."
+        )
+        import_btn.clicked.connect(self._on_import_clicked)
+        backup_btn_layout.addWidget(import_btn)
+
+        backup_btn_layout.addStretch()
+        backup_layout.addLayout(backup_btn_layout)
+
+        layout.addWidget(backup_group)
+
         # Actions group
         actions_group = QGroupBox("Storage Actions")
         actions_layout = QVBoxLayout(actions_group)
+
+        # Browse stored cards button
+        browse_layout = QHBoxLayout()
+        browse_btn = QPushButton("Browse Stored Cards...")
+        browse_btn.setToolTip(
+            "View, edit, or delete stored card entries.\n"
+            "See all cards with their names, UIDs, and keys."
+        )
+        browse_btn.clicked.connect(self._on_browse_clicked)
+        browse_layout.addWidget(browse_btn)
+        browse_layout.addStretch()
+        actions_layout.addLayout(browse_layout)
+
+        actions_layout.addSpacing(10)
 
         # Reset storage button
         reset_layout = QHBoxLayout()
@@ -251,6 +314,22 @@ class StorageTab(QWidget):
         )
         if reply == QMessageBox.Yes:
             self.reset_storage_requested.emit()
+
+    def _on_change_method_clicked(self):
+        """Handle change encryption method request."""
+        self.change_method_requested.emit()
+
+    def _on_export_clicked(self):
+        """Handle export backup request."""
+        self.export_backup_requested.emit()
+
+    def _on_import_clicked(self):
+        """Handle import backup request."""
+        self.import_backup_requested.emit()
+
+    def _on_browse_clicked(self):
+        """Handle browse storage request."""
+        self.browse_storage_requested.emit()
 
     def _on_cache_timeout_changed(self, index: int):
         """Handle cache timeout selection change."""
@@ -435,6 +514,7 @@ class ImportPluginDialog(QDialog):
         self.setMinimumWidth(500)
 
         self._result_path = None
+        self._imported_names = []  # Names of successfully imported plugins
         self._setup_ui()
 
     def _setup_ui(self):
@@ -525,7 +605,8 @@ class ImportPluginDialog(QDialog):
 
     def _on_accept(self):
         """Handle import request."""
-        plugins_dir = Path(__file__).parent.parent.parent / "plugins" / "examples"
+        # Use user_plugins in current working directory (writable, persists across restarts)
+        plugins_dir = Path.cwd() / "user_plugins"
 
         if self._local_radio.isChecked():
             self._import_local(plugins_dir)
@@ -619,6 +700,7 @@ class ImportPluginDialog(QDialog):
         import urllib.request
         import urllib.error
         import json
+        import yaml
 
         repo = self._github_edit.text().strip()
         if not repo:
@@ -649,84 +731,87 @@ class ImportPluginDialog(QDialog):
         self._status_label.setText("Searching for plugin files...")
         QApplication.processEvents()
 
-        # Search patterns
-        plugin_patterns = [
-            "gp-plugin.yaml",
-            "gp-plugin.yml",
-        ]
+        # Use the shared utility functions to find ALL plugins
+        from src.views.dialogs.plugin_designer.utils import (
+            fetch_github_plugin_definition,
+            fetch_github_release_plugin_definition,
+        )
 
         try:
-            # First, try direct files
-            found_url = None
-            found_name = None
+            # Collect from repo root and release assets
+            repo_plugins = fetch_github_plugin_definition(owner, repo_name)
+            release_plugins = fetch_github_release_plugin_definition(owner, repo_name, "")
 
-            for pattern in plugin_patterns:
-                raw_url = f"https://raw.githubusercontent.com/{owner}/{repo_name}/main/{pattern}"
-                try:
-                    req = urllib.request.Request(raw_url, method="HEAD")
-                    urllib.request.urlopen(req, timeout=10)
-                    found_url = raw_url
-                    found_name = f"{repo_name}.gp-plugin.yaml"
-                    break
-                except urllib.error.HTTPError:
-                    # Try master branch
-                    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo_name}/master/{pattern}"
-                    try:
-                        req = urllib.request.Request(raw_url, method="HEAD")
-                        urllib.request.urlopen(req, timeout=10)
-                        found_url = raw_url
-                        found_name = f"{repo_name}.gp-plugin.yaml"
-                        break
-                    except urllib.error.HTTPError:
-                        continue
+            # Combine and deduplicate by filename
+            seen_filenames = set()
+            all_plugins = []
+            for filename, plugin_data in repo_plugins + release_plugins:
+                if filename not in seen_filenames:
+                    seen_filenames.add(filename)
+                    all_plugins.append((filename, plugin_data))
 
-            # If not found, search via GitHub API
-            if not found_url:
-                api_url = f"https://api.github.com/repos/{owner}/{repo_name}/contents"
-                req = urllib.request.Request(api_url)
-                req.add_header("Accept", "application/vnd.github.v3+json")
-
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    contents = json.loads(response.read().decode())
-
-                for item in contents:
-                    if item["type"] == "file" and item["name"].endswith(".gp-plugin.yaml"):
-                        found_url = item["download_url"]
-                        found_name = item["name"]
-                        break
-
-            if not found_url:
+            if not all_plugins:
                 self._status_label.setText("")
                 QMessageBox.warning(
                     self,
                     "No Plugin Found",
-                    f"Could not find a plugin file in repository '{owner}/{repo_name}'.\n\n"
-                    "Expected: gp-plugin.yaml or *.gp-plugin.yaml in the repository root.",
+                    f"Could not find any plugin files in repository '{owner}/{repo_name}'.\n\n"
+                    "Expected: gp-plugin.yaml in repo root or *.gp-plugin.yaml in releases.",
                 )
                 return
 
-            # Download the plugin
-            self._status_label.setText(f"Downloading {found_name}...")
-            QApplication.processEvents()
-
-            dest = plugins_dir / found_name
-            if dest.exists():
-                reply = QMessageBox.question(
-                    self,
-                    "File Exists",
-                    f"Plugin '{found_name}' already exists. Overwrite?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
-                )
-                if reply != QMessageBox.Yes:
+            # If multiple plugins found, show selection dialog
+            if len(all_plugins) > 1:
+                selected = self._show_plugin_selection_dialog(all_plugins)
+                if not selected:
                     self._status_label.setText("")
                     return
+            else:
+                selected = all_plugins
 
-            plugins_dir.mkdir(parents=True, exist_ok=True)
-            urllib.request.urlretrieve(found_url, dest)
-            self._result_path = str(dest)
-            self._status_label.setText("Downloaded successfully!")
-            self.accept()
+            # Import selected plugins
+            imported = []
+            for filename, plugin_data in selected:
+                plugin_name = plugin_data.get("plugin", {}).get("name", filename.replace(".gp-plugin.yaml", ""))
+                safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in plugin_name)
+                dest = plugins_dir / f"{safe_name}.yaml"
+
+                if dest.exists():
+                    reply = QMessageBox.question(
+                        self,
+                        "File Exists",
+                        f"Plugin '{safe_name}.yaml' already exists. Overwrite?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
+                    )
+                    if reply != QMessageBox.Yes:
+                        continue
+
+                self._status_label.setText(f"Saving {safe_name}.yaml...")
+                QApplication.processEvents()
+
+                plugins_dir.mkdir(parents=True, exist_ok=True)
+                with open(dest, "w", encoding="utf-8") as f:
+                    yaml.dump(plugin_data, f, default_flow_style=False, allow_unicode=True)
+                imported.append(safe_name)
+
+            if imported:
+                self._status_label.setText("Import complete!")
+                self._result_path = str(plugins_dir / f"{imported[0]}.yaml")
+                self._imported_names = imported  # Store for caller to access
+
+                # Debug logging
+                import os
+                debug_path = os.path.expanduser("~/gp_gui_debug.log")
+                with open(debug_path, "a") as f:
+                    f.write(f"\n=== _import_github completed ===\n")
+                    f.write(f"plugins_dir: {plugins_dir}\n")
+                    f.write(f"imported names: {imported}\n")
+                    f.write(f"result_path: {self._result_path}\n")
+
+                self.accept()
+            else:
+                self._status_label.setText("")
 
         except urllib.error.URLError as e:
             self._status_label.setText("")
@@ -735,9 +820,48 @@ class ImportPluginDialog(QDialog):
             self._status_label.setText("")
             QMessageBox.critical(self, "Error", f"Failed to import plugin:\n{e}")
 
+    def _show_plugin_selection_dialog(self, plugins: list) -> list:
+        """Show dialog to select which plugins to import."""
+        from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QListWidget, QListWidgetItem
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Plugins to Import")
+        dialog.setMinimumWidth(400)
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(f"Found {len(plugins)} plugin definitions. Select which to import:"))
+
+        list_widget = QListWidget()
+        for filename, plugin_data in plugins:
+            plugin_name = plugin_data.get("plugin", {}).get("name", filename)
+            item = QListWidgetItem(f"{plugin_name} ({filename})")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            item.setData(Qt.UserRole, (filename, plugin_data))
+            list_widget.addItem(item)
+        layout.addWidget(list_widget)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec_() == QDialog.Accepted:
+            selected = []
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                if item.checkState() == Qt.Checked:
+                    selected.append(item.data(Qt.UserRole))
+            return selected
+        return []
+
     def get_imported_path(self) -> str:
         """Get the path to the imported plugin file."""
         return self._result_path
+
+    def get_imported_names(self) -> List[str]:
+        """Get the names of successfully imported plugins."""
+        return self._imported_names
 
 
 class PluginsTab(QWidget):
@@ -746,16 +870,19 @@ class PluginsTab(QWidget):
     plugins_changed = pyqtSignal()
     edit_plugin = pyqtSignal(str, str)  # plugin_name, yaml_path
     refresh_requested = pyqtSignal()  # request parent to refresh plugins
+    save_required = pyqtSignal()  # request immediate save (for hiding plugins)
 
     def __init__(
         self,
         plugin_map: Dict[str, Any],
         disabled_plugins: List[str],
+        hidden_plugins: List[str] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self._plugin_map = plugin_map
         self._disabled_plugins = set(disabled_plugins)
+        self._hidden_plugins = set(hidden_plugins or [])
         self._plugin_items: Dict[str, PluginItem] = {}
         self._setup_ui()
 
@@ -779,8 +906,11 @@ class PluginsTab(QWidget):
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setSpacing(4)
 
-        # Add plugin items
+        # Add plugin items (skip hidden plugins)
         for plugin_name, plugin_cls_or_instance in self._plugin_map.items():
+            if plugin_name in self._hidden_plugins:
+                continue  # Skip hidden plugins
+
             # Get plugin info
             plugin_info = self._get_plugin_info(plugin_name, plugin_cls_or_instance)
             enabled = plugin_name not in self._disabled_plugins
@@ -820,6 +950,12 @@ class PluginsTab(QWidget):
         disable_all_btn = QPushButton("Disable All")
         disable_all_btn.clicked.connect(self._disable_all)
         btn_layout.addWidget(disable_all_btn)
+
+        # Restore hidden button (only visible when there are hidden plugins)
+        self._restore_hidden_btn = QPushButton("Restore Hidden...")
+        self._restore_hidden_btn.clicked.connect(self._on_restore_hidden)
+        self._restore_hidden_btn.setVisible(len(self._hidden_plugins) > 0)
+        btn_layout.addWidget(self._restore_hidden_btn)
 
         layout.addLayout(btn_layout)
 
@@ -875,19 +1011,145 @@ class PluginsTab(QWidget):
         """Get list of disabled plugin names."""
         return list(self._disabled_plugins)
 
+    def get_hidden_plugins(self) -> List[str]:
+        """Get list of hidden plugin names (bundled plugins user chose to hide)."""
+        return list(self._hidden_plugins)
+
+    def update_plugin_map(self, new_plugin_map: Dict[str, Any]):
+        """Update the plugin list with a new plugin map (after import/delete)."""
+        self._plugin_map = new_plugin_map
+
+        # Clear existing plugin items from UI
+        for widget in self._plugin_items.values():
+            widget.setParent(None)
+            widget.deleteLater()
+        self._plugin_items.clear()
+
+        # Find the scroll content layout
+        scroll = self.findChild(QScrollArea)
+        if scroll and scroll.widget():
+            scroll_layout = scroll.widget().layout()
+            if scroll_layout:
+                # Remove the stretch at the end
+                while scroll_layout.count() > 0:
+                    item = scroll_layout.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+
+                # Rebuild plugin items
+                for plugin_name, plugin_cls_or_instance in self._plugin_map.items():
+                    if plugin_name in self._hidden_plugins:
+                        continue
+
+                    plugin_info = self._get_plugin_info(plugin_name, plugin_cls_or_instance)
+                    enabled = plugin_name not in self._disabled_plugins
+
+                    item = PluginItem(
+                        plugin_name,
+                        plugin_info,
+                        enabled,
+                        is_yaml=plugin_info.get("is_yaml", False),
+                        yaml_path=plugin_info.get("yaml_path"),
+                    )
+                    item.toggled.connect(self._on_plugin_toggled)
+                    item.edit_requested.connect(self._on_edit_plugin)
+                    item.duplicate_requested.connect(self._on_duplicate_plugin)
+                    item.export_requested.connect(self._on_export_plugin)
+                    item.delete_requested.connect(self._on_delete_plugin)
+                    self._plugin_items[plugin_name] = item
+                    scroll_layout.addWidget(item)
+
+                scroll_layout.addStretch()
+
+    def _on_restore_hidden(self):
+        """Show dialog to restore hidden plugins."""
+        if not self._hidden_plugins:
+            return
+
+        from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QListWidget, QListWidgetItem
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Restore Hidden Plugins")
+        dialog.setMinimumWidth(300)
+
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Select plugins to restore:"))
+
+        list_widget = QListWidget()
+        for name in sorted(self._hidden_plugins):
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            list_widget.addItem(item)
+        layout.addWidget(list_widget)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec_() == QDialog.Accepted:
+            restored = []
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                if item.checkState() == Qt.Checked:
+                    restored.append(item.text())
+
+            if restored:
+                for name in restored:
+                    self._hidden_plugins.discard(name)
+                self._restore_hidden_btn.setVisible(len(self._hidden_plugins) > 0)
+                self.plugins_changed.emit()
+                self.save_required.emit()  # Save immediately so restore persists
+                self.refresh_requested.emit()
+                QMessageBox.information(
+                    self,
+                    "Plugins Restored",
+                    f"Restored {len(restored)} plugin(s).\n\n"
+                    "The application will reload plugins to apply changes.",
+                )
+
     def _on_import_plugin(self):
         """Handle import plugin request."""
         dialog = ImportPluginDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             imported_path = dialog.get_imported_path()
+            imported_names = dialog.get_imported_names()
+
+            # Debug: Log to file for troubleshooting
+            import os
+            debug_path = os.path.expanduser("~/gp_gui_debug.log")
+            with open(debug_path, "a") as f:
+                f.write(f"\n=== _on_import_plugin ===\n")
+                f.write(f"imported_path: {imported_path}\n")
+                f.write(f"imported_names: {imported_names}\n")
+                f.write(f"hidden_plugins: {self._hidden_plugins}\n")
+
             if imported_path:
-                QMessageBox.information(
-                    self,
-                    "Plugin Imported",
-                    f"Plugin imported successfully!\n\nFile: {Path(imported_path).name}\n\n"
-                    "The application will reload plugins to apply changes.",
-                )
+                # Unhide any imported plugins that were previously hidden
+                unhidden = []
+                for name in imported_names:
+                    if name in self._hidden_plugins:
+                        self._hidden_plugins.discard(name)
+                        unhidden.append(name)
+                if unhidden:
+                    self._restore_hidden_btn.setVisible(len(self._hidden_plugins) > 0)
+
+                with open(debug_path, "a") as f:
+                    f.write(f"unhidden: {unhidden}\n")
+                    f.write(f"hidden_plugins after: {self._hidden_plugins}\n")
+
+                count = len(imported_names)
+                if count == 1:
+                    msg = f"Plugin imported successfully!\n\nFile: {Path(imported_path).name}"
+                else:
+                    msg = f"{count} plugins imported successfully!"
+                if unhidden:
+                    msg += f"\n\n(Note: {len(unhidden)} previously hidden plugin(s) have been restored)"
+
+                QMessageBox.information(self, "Plugin Imported", msg)
                 self.plugins_changed.emit()
+                self.save_required.emit()  # Save to persist unhiding
                 self.refresh_requested.emit()
 
     def _on_edit_plugin(self, plugin_name: str):
@@ -989,6 +1251,33 @@ class PluginsTab(QWidget):
                     widget.deleteLater()
                 self.plugins_changed.emit()
                 self.refresh_requested.emit()
+            except OSError as e:
+                import errno
+                # Check for read-only filesystem (errno 30) or permission denied (errno 1/13)
+                if e.errno in (errno.EROFS, errno.EPERM, errno.EACCES):
+                    # File is read-only (e.g., bundled in AppImage) - offer to hide instead
+                    reply = QMessageBox.question(
+                        self,
+                        "Cannot Delete",
+                        f"Plugin '{plugin_name}' is in a read-only location (bundled with the app).\n\n"
+                        "Would you like to hide it instead? Hidden plugins won't appear in the list.",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes,
+                    )
+                    if reply == QMessageBox.Yes:
+                        self._hidden_plugins.add(plugin_name)
+                        self._disabled_plugins.discard(plugin_name)
+                        # Remove widget from UI immediately
+                        if plugin_name in self._plugin_items:
+                            widget = self._plugin_items.pop(plugin_name)
+                            widget.setParent(None)
+                            widget.deleteLater()
+                        # Show restore button now that there are hidden plugins
+                        self._restore_hidden_btn.setVisible(True)
+                        self.plugins_changed.emit()
+                        self.save_required.emit()  # Save immediately so hiding persists
+                else:
+                    QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
 
@@ -1001,6 +1290,10 @@ class SettingsDialog(QDialog):
     edit_plugin_requested = pyqtSignal(str)  # yaml_path
     refresh_plugins_requested = pyqtSignal()
     reset_storage_requested = pyqtSignal()
+    change_method_requested = pyqtSignal()
+    export_backup_requested = pyqtSignal()
+    import_backup_requested = pyqtSignal()
+    browse_storage_requested = pyqtSignal()
     cache_timeout_changed = pyqtSignal(str)  # Emits timeout key
 
     def __init__(
@@ -1034,15 +1327,21 @@ class SettingsDialog(QDialog):
         # Storage tab
         self._storage_tab = StorageTab(self._storage_info)
         self._storage_tab.reset_storage_requested.connect(self._on_reset_storage)
+        self._storage_tab.change_method_requested.connect(self._on_change_method)
+        self._storage_tab.export_backup_requested.connect(self._on_export_backup)
+        self._storage_tab.import_backup_requested.connect(self._on_import_backup)
+        self._storage_tab.browse_storage_requested.connect(self._on_browse_storage)
         self._storage_tab.cache_timeout_changed.connect(self._on_cache_timeout_changed)
         tabs.addTab(self._storage_tab, "Storage")
 
         # Plugins tab
         disabled = self._config.get("disabled_plugins", [])
-        self._plugins_tab = PluginsTab(self._plugin_map, disabled)
+        hidden = self._config.get("hidden_plugins", [])
+        self._plugins_tab = PluginsTab(self._plugin_map, disabled, hidden)
         self._plugins_tab.plugins_changed.connect(self._on_changes_made)
         self._plugins_tab.edit_plugin.connect(self._on_edit_plugin)
         self._plugins_tab.refresh_requested.connect(self._on_refresh_requested)
+        self._plugins_tab.save_required.connect(self._save_settings)
         tabs.addTab(self._plugins_tab, "Plugins")
 
         layout.addWidget(tabs)
@@ -1075,6 +1374,7 @@ class SettingsDialog(QDialog):
     def _save_settings(self):
         """Save settings to config."""
         self._config["disabled_plugins"] = self._plugins_tab.get_disabled_plugins()
+        self._config["hidden_plugins"] = self._plugins_tab.get_hidden_plugins()
         self._config["cache_timeout"] = self._storage_tab.get_cache_timeout()
 
     def _on_edit_plugin(self, plugin_name: str, yaml_path: str):
@@ -1094,11 +1394,47 @@ class SettingsDialog(QDialog):
 
     def _on_refresh_requested(self):
         """Handle request to refresh plugin list."""
+        # Debug: Log to file
+        import os
+        debug_path = os.path.expanduser("~/gp_gui_debug.log")
+        with open(debug_path, "a") as f:
+            f.write(f"\n=== _on_refresh_requested ===\n")
+
+        # Reload plugins and update the tab UI
+        from main import load_plugins
+        new_plugin_map = load_plugins()
+
+        with open(debug_path, "a") as f:
+            f.write(f"load_plugins returned: {len(new_plugin_map) if new_plugin_map else 0} plugins\n")
+            if new_plugin_map:
+                f.write(f"Plugin names: {list(new_plugin_map.keys())}\n")
+            f.write(f"Hidden in tab: {self._plugins_tab._hidden_plugins}\n")
+
+        if new_plugin_map:
+            self._plugin_map = new_plugin_map
+            self._plugins_tab.update_plugin_map(new_plugin_map)
+        # Also notify main window
         self.refresh_plugins_requested.emit()
 
     def _on_reset_storage(self):
         """Handle reset storage request - emit to main window."""
         self.reset_storage_requested.emit()
+
+    def _on_change_method(self):
+        """Handle change encryption method request - emit to main window."""
+        self.change_method_requested.emit()
+
+    def _on_export_backup(self):
+        """Handle export backup request - emit to main window."""
+        self.export_backup_requested.emit()
+
+    def _on_import_backup(self):
+        """Handle import backup request - emit to main window."""
+        self.import_backup_requested.emit()
+
+    def _on_browse_storage(self):
+        """Handle browse storage request - emit to main window."""
+        self.browse_storage_requested.emit()
 
     def _on_cache_timeout_changed(self, timeout_key: str):
         """Handle cache timeout change - emit to main window."""
