@@ -24,6 +24,8 @@ from PyQt5.QtWidgets import (
 
 import yaml
 
+from ....utils.colors import Colors
+
 
 def _literal_str_representer(dumper, data):
     """Represent multiline strings with literal block style (|)."""
@@ -738,7 +740,7 @@ class PreviewPage(QWizardPage):
         # Summary info
         self._summary_label = QLabel()
         self._summary_label.setWordWrap(True)
-        self._summary_label.setStyleSheet("background-color: #f5f5f5; padding: 12px; border-radius: 4px;")
+        self._summary_label.setStyleSheet(f"background-color: {Colors.light_bg()}; padding: 12px; border-radius: 4px;")
         layout.addWidget(self._summary_label)
 
         layout.addSpacing(20)
@@ -760,7 +762,7 @@ class PreviewPage(QWizardPage):
             "Click 'Finish' to save the plugin YAML file.\n"
             "You can also copy the YAML to clipboard and paste it elsewhere."
         )
-        instructions.setStyleSheet("color: gray;")
+        instructions.setStyleSheet(f"color: {Colors.muted_text()};")
         layout.addWidget(instructions)
 
     def initializePage(self):

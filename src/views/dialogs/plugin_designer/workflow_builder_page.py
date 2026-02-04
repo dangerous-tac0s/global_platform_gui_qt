@@ -36,6 +36,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QCursor
 
+from ....utils.colors import Colors
+
 
 class WorkflowStepDialog(QDialog):
     """Dialog for editing a workflow step."""
@@ -109,7 +111,7 @@ class WorkflowStepDialog(QDialog):
             "After adding more steps to this workflow, you can edit this step\n"
             "to set which steps must complete before this one runs."
         )
-        self._deps_hint.setStyleSheet("color: gray; font-size: 10px; font-style: italic;")
+        self._deps_hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px; font-style: italic;")
         deps_layout.addWidget(self._deps_hint)
 
         left_layout.addWidget(deps_group)
@@ -198,7 +200,7 @@ class WorkflowStepDialog(QDialog):
         vars_layout.addWidget(self._vars_tree)
 
         hint = QLabel("Use {variable_id} in APDU templates\nor context.get('variable_id') in scripts")
-        hint.setStyleSheet("color: gray; font-size: 10px;")
+        hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px;")
         hint.setWordWrap(True)
         vars_layout.addWidget(hint)
 
@@ -542,7 +544,7 @@ class WorkflowDefinitionDialog(QDialog):
         preview_layout.addWidget(QLabel("Step Details:"))
         self._preview_text = QTextEdit()
         self._preview_text.setReadOnly(True)
-        self._preview_text.setStyleSheet("background-color: #f8f8f8;")
+        self._preview_text.setStyleSheet(f"background-color: {Colors.lighter_bg()};")
         preview_layout.addWidget(self._preview_text)
 
         splitter.addWidget(preview_widget)
@@ -781,7 +783,7 @@ class WorkflowBuilderPage(QWizardPage):
             "APDU commands, user dialogs, Python scripts, and confirmations."
         )
         help_label.setWordWrap(True)
-        help_label.setStyleSheet("color: gray;")
+        help_label.setStyleSheet(f"color: {Colors.muted_text()};")
         layout.addWidget(help_label)
 
         # Workflows list

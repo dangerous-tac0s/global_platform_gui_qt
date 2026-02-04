@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import platform
 import pprint
 import sys
 import os
@@ -14,6 +15,9 @@ import gnupg
 
 import markdown
 from PyQt5.QtGui import QIcon, QFont, QFontMetrics
+
+from src.utils.colors import Colors
+
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -891,7 +895,7 @@ class GPManagerApp(QMainWindow):
             plugin_font = QFont()
             plugin_font.setPointSize(10)  # ~13px, using points for DPI independence
             plugin_name_label.setFont(plugin_font)
-            plugin_name_label.setStyleSheet("color: #666;")
+            plugin_name_label.setStyleSheet(f"color: {Colors.muted_text()};")
             plugin_name_label.setWordWrap(False)
             content_layout.addWidget(plugin_name_label)
 

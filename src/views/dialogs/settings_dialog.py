@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
 )
 
 from src.plugins.yaml import set_debug_enabled, is_debug_enabled
+from src.utils.colors import Colors
 from src.views.dialogs.plugin_designer.utils import show_open_file_dialog, show_save_file_dialog
 
 
@@ -70,7 +71,7 @@ class GeneralTab(QWidget):
         debug_desc = QLabel(
             "Enable this option to see detailed logs for troubleshooting plugin issues."
         )
-        debug_desc.setStyleSheet("color: #666;")
+        debug_desc.setStyleSheet(f"color: {Colors.muted_text()};")
         debug_desc.setWordWrap(True)
         debug_layout.addWidget(debug_desc)
 
@@ -133,7 +134,7 @@ class StorageTab(QWidget):
         file_layout = QHBoxLayout()
         file_layout.addWidget(QLabel("Storage file:"))
         self._file_label = QLabel(self._storage_info.get("file_path", "Not configured"))
-        self._file_label.setStyleSheet("color: #888;")
+        self._file_label.setStyleSheet(f"color: {Colors.secondary_text()};")
         file_layout.addWidget(self._file_label)
         file_layout.addStretch()
         status_layout.addLayout(file_layout)
@@ -144,7 +145,7 @@ class StorageTab(QWidget):
         method = self._storage_info.get("method", "Unknown")
         method_display = "GPG" if method == "gpg" else "System Keyring" if method == "keyring" else method
         self._method_label = QLabel(method_display)
-        self._method_label.setStyleSheet("color: #888;")
+        self._method_label.setStyleSheet(f"color: {Colors.secondary_text()};")
         method_layout.addWidget(self._method_label)
         method_layout.addStretch()
         status_layout.addLayout(method_layout)
@@ -187,7 +188,7 @@ class StorageTab(QWidget):
             "Control how long decrypted storage remains cached in memory.\n"
             "Longer timeouts reduce GPG unlock prompts but keep data in memory longer."
         )
-        cache_desc.setStyleSheet("color: #666;")
+        cache_desc.setStyleSheet(f"color: {Colors.muted_text()};")
         cache_desc.setWordWrap(True)
         cache_layout.addWidget(cache_desc)
 
@@ -215,7 +216,7 @@ class StorageTab(QWidget):
         backup_desc = QLabel(
             "Create encrypted backups or restore from previous backups."
         )
-        backup_desc.setStyleSheet("color: #666;")
+        backup_desc.setStyleSheet(f"color: {Colors.muted_text()};")
         backup_desc.setWordWrap(True)
         backup_layout.addWidget(backup_desc)
 
@@ -276,7 +277,7 @@ class StorageTab(QWidget):
             "Resetting creates a new empty storage file. Your existing data "
             "will be backed up to a timestamped file in the same directory."
         )
-        reset_desc.setStyleSheet("color: #666;")
+        reset_desc.setStyleSheet(f"color: {Colors.muted_text()};")
         reset_desc.setWordWrap(True)
         actions_layout.addWidget(reset_desc)
 
@@ -292,7 +293,7 @@ class StorageTab(QWidget):
             "• <b>System Keyring</b>: Uses your OS credential manager (recommended)\n"
             "• <b>GPG</b>: Uses a GPG key for encryption"
         )
-        info_text.setStyleSheet("color: #555;")
+        info_text.setStyleSheet(f"color: {Colors.subtle_text()};")
         info_text.setWordWrap(True)
         info_text.setTextFormat(Qt.RichText)
         info_layout.addWidget(info_text)
@@ -426,14 +427,14 @@ class PluginItem(QFrame):
         # Type and details
         plugin_type = plugin_info.get("type", "unknown")
         type_label = QLabel(f"Type: {plugin_type}")
-        type_label.setStyleSheet("color: #333;")
+        type_label.setStyleSheet(f"color: {Colors.primary_text()};")
         info_layout.addWidget(type_label)
 
         # Description if available
         description = plugin_info.get("description", "")
         if description:
             desc_label = QLabel(description)
-            desc_label.setStyleSheet("color: #333;")
+            desc_label.setStyleSheet(f"color: {Colors.primary_text()};")
             desc_label.setWordWrap(True)
             info_layout.addWidget(desc_label)
 
@@ -441,7 +442,7 @@ class PluginItem(QFrame):
         caps = plugin_info.get("caps", [])
         if caps:
             caps_label = QLabel(f"Provides: {len(caps)} applet(s)")
-            caps_label.setStyleSheet("color: #333;")
+            caps_label.setStyleSheet(f"color: {Colors.primary_text()};")
             info_layout.addWidget(caps_label)
 
         layout.addLayout(info_layout, 1)
@@ -564,7 +565,7 @@ class ImportPluginDialog(QDialog):
         github_desc = QLabel(
             "Will search for gp-plugin.yaml or *.gp-plugin.yaml in the repository root."
         )
-        github_desc.setStyleSheet("color: #666; margin-left: 20px;")
+        github_desc.setStyleSheet(f"color: {Colors.muted_text()}; margin-left: 20px;")
         github_desc.setWordWrap(True)
         source_layout.addWidget(github_desc)
 
@@ -572,7 +573,7 @@ class ImportPluginDialog(QDialog):
 
         # Status label
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: #888;")
+        self._status_label.setStyleSheet(f"color: {Colors.secondary_text()};")
         self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
 
@@ -893,7 +894,7 @@ class PluginsTab(QWidget):
         header = QLabel(
             "Enable or disable plugins. Disabled plugins will not load on next startup."
         )
-        header.setStyleSheet("color: #555;margin-bottom: 10px;")
+        header.setStyleSheet(f"color: {Colors.subtle_text()};margin-bottom: 10px;")
         header.setWordWrap(True)
         layout.addWidget(header)
 

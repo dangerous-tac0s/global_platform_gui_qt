@@ -23,6 +23,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
+from ...utils.colors import Colors
+
 
 def _get_gpg_keys() -> list:
     """
@@ -130,7 +132,7 @@ class ExportBackupDialog(QDialog):
         method_layout.addWidget(self.password_radio)
 
         password_desc = QLabel("Encrypt with a password you choose")
-        password_desc.setStyleSheet("color: gray; margin-left: 20px; font-size: 11px;")
+        password_desc.setStyleSheet(f"color: {Colors.muted_text()}; margin-left: 20px; font-size: 11px;")
         method_layout.addWidget(password_desc)
 
         # GPG option
@@ -143,7 +145,7 @@ class ExportBackupDialog(QDialog):
         if not self.gpg_available:
             gpg_desc_text += " (GPG not available)"
         gpg_desc = QLabel(gpg_desc_text)
-        gpg_desc.setStyleSheet("color: gray; margin-left: 20px; font-size: 11px;")
+        gpg_desc.setStyleSheet(f"color: {Colors.muted_text()}; margin-left: 20px; font-size: 11px;")
         method_layout.addWidget(gpg_desc)
 
         layout.addWidget(method_group)
@@ -466,7 +468,7 @@ class ChangeEncryptionDialog(QDialog):
             "Changing the encryption method will re-encrypt all stored data.\n"
             "Make sure you have a backup before proceeding."
         )
-        warning.setStyleSheet("color: #b58900; padding: 10px; background: #fdf6e3; border-radius: 4px;")
+        warning.setStyleSheet(f"color: {Colors.warning_border()}; padding: 10px; background: {Colors.warning_bg()}; border-radius: 4px;")
         layout.addWidget(warning)
 
         if self.current_method:
@@ -486,7 +488,7 @@ class ChangeEncryptionDialog(QDialog):
         method_layout.addWidget(self.keyring_radio)
 
         keyring_desc = QLabel("Store encryption key in system keyring (recommended)")
-        keyring_desc.setStyleSheet("color: gray; margin-left: 20px; font-size: 11px;")
+        keyring_desc.setStyleSheet(f"color: {Colors.muted_text()}; margin-left: 20px; font-size: 11px;")
         method_layout.addWidget(keyring_desc)
 
         # GPG option
@@ -500,7 +502,7 @@ class ChangeEncryptionDialog(QDialog):
         if not self.gpg_available:
             gpg_desc_text += " - GPG not available"
         gpg_desc = QLabel(gpg_desc_text)
-        gpg_desc.setStyleSheet("color: gray; margin-left: 20px; font-size: 11px;")
+        gpg_desc.setStyleSheet(f"color: {Colors.muted_text()}; margin-left: 20px; font-size: 11px;")
         method_layout.addWidget(gpg_desc)
 
         layout.addWidget(method_group)

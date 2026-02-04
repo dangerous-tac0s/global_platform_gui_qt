@@ -28,6 +28,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
 )
 
+from ....utils.colors import Colors
+
 
 # Well-known applets with their AIDs for mutual exclusion selection
 KNOWN_APPLETS = [
@@ -135,7 +137,7 @@ class MetadataPage(QWizardPage):
 
         # Info label for multiple CAPs (hidden by default)
         self._caps_info_label = QLabel("")
-        self._caps_info_label.setStyleSheet("background-color: #e3f2fd; padding: 8px; border-radius: 4px;")
+        self._caps_info_label.setStyleSheet(f"background-color: {Colors.info_bg()}; padding: 8px; border-radius: 4px;")
         self._caps_info_label.setWordWrap(True)
         self._caps_info_label.hide()
         layout.addWidget(self._caps_info_label)

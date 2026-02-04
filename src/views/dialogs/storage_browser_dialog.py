@@ -25,6 +25,8 @@ from PyQt5.QtWidgets import (
     QToolButton,
 )
 
+from ...utils.colors import Colors
+
 
 # Valid key lengths in bytes
 VALID_KEY_LENGTHS = [8, 16, 24, 32]
@@ -124,7 +126,7 @@ class CardEntryDialog(QDialog):
         if description:
             desc_label = QLabel(description)
             desc_label.setWordWrap(True)
-            desc_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+            desc_label.setStyleSheet(f"color: {Colors.muted_text()}; margin-bottom: 10px;")
             layout.addWidget(desc_label)
 
         # Form layout for basic fields
@@ -134,7 +136,7 @@ class CardEntryDialog(QDialog):
         self._uid_input = QLineEdit()
         self._uid_input.setText(self._uid)
         self._uid_input.setReadOnly(True)
-        self._uid_input.setStyleSheet("background-color: #f0f0f0;")
+        self._uid_input.setStyleSheet(f"background-color: {Colors.input_bg()};")
         form.addRow("UID:", self._uid_input)
 
         # Name field
@@ -162,7 +164,7 @@ class CardEntryDialog(QDialog):
         single_layout.addRow("Key:", self._key_input)
 
         self._single_validation = QLabel()
-        self._single_validation.setStyleSheet("color: #666; font-size: 11px;")
+        self._single_validation.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 11px;")
         single_layout.addRow("", self._single_validation)
 
         layout.addWidget(self._single_key_group)
@@ -193,7 +195,7 @@ class CardEntryDialog(QDialog):
         sep_layout.addRow("", self._use_same_key)
 
         self._separate_validation = QLabel()
-        self._separate_validation.setStyleSheet("color: #666; font-size: 11px;")
+        self._separate_validation.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 11px;")
         sep_layout.addRow("", self._separate_validation)
 
         layout.addWidget(self._separate_keys_group)
@@ -285,10 +287,10 @@ class CardEntryDialog(QDialog):
                 if not (enc_len == mac_len == dek_len):
                     all_valid = False
                     self._separate_validation.setText("All keys must have the same length")
-                    self._separate_validation.setStyleSheet("color: #f44336; font-size: 11px;")
+                    self._separate_validation.setStyleSheet(f"color: {Colors.error()}; font-size: 11px;")
                 else:
                     self._separate_validation.setText(f"All keys valid ({enc_len} bytes each)")
-                    self._separate_validation.setStyleSheet("color: #4caf50; font-size: 11px;")
+                    self._separate_validation.setStyleSheet(f"color: {Colors.success()}; font-size: 11px;")
             else:
                 messages = []
                 if not enc_valid:
@@ -298,7 +300,7 @@ class CardEntryDialog(QDialog):
                 if not dek_valid:
                     messages.append(f"DEK: {dek_msg}")
                 self._separate_validation.setText("; ".join(messages))
-                self._separate_validation.setStyleSheet("color: #f44336; font-size: 11px;")
+                self._separate_validation.setStyleSheet(f"color: {Colors.error()}; font-size: 11px;")
 
             self._save_btn.setEnabled(all_valid)
             self._validation_label.setText("")
@@ -308,10 +310,10 @@ class CardEntryDialog(QDialog):
 
             if valid:
                 self._single_validation.setText(msg)
-                self._single_validation.setStyleSheet("color: #4caf50; font-size: 11px;")
+                self._single_validation.setStyleSheet(f"color: {Colors.success()}; font-size: 11px;")
             else:
                 self._single_validation.setText(msg)
-                self._single_validation.setStyleSheet("color: #f44336; font-size: 11px;")
+                self._single_validation.setStyleSheet(f"color: {Colors.error()}; font-size: 11px;")
 
             self._save_btn.setEnabled(valid)
             self._validation_label.setText("")
@@ -404,7 +406,7 @@ class StorageBrowserDialog(QDialog):
         # Empty state label
         self._empty_label = QLabel("No cards stored yet.")
         self._empty_label.setAlignment(Qt.AlignCenter)
-        self._empty_label.setStyleSheet("color: #666; font-style: italic;")
+        self._empty_label.setStyleSheet(f"color: {Colors.muted_text()}; font-style: italic;")
         self._empty_label.hide()
         layout.addWidget(self._empty_label)
 

@@ -22,6 +22,8 @@ from PyQt5.QtWidgets import (
     QMenu,
 )
 
+from ...utils.colors import Colors
+
 
 class ManageTagsDialog(QDialog):
     """Dialog for managing stored tags/cards."""
@@ -47,7 +49,7 @@ class ManageTagsDialog(QDialog):
             "Changes are saved when you click OK."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: #666; margin-bottom: 8px;")
+        info.setStyleSheet(f"color: {Colors.muted_text()}; margin-bottom: 8px;")
         layout.addWidget(info)
 
         # Table of tags

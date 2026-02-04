@@ -27,6 +27,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QFontMetrics
 
 from ...events.event_bus import EventBus, StatusMessageEvent, ErrorEvent
+from ...utils.colors import Colors
 
 
 class MessageState(Enum):
@@ -117,7 +118,7 @@ class MessageQueue(QWidget):
         # Queue badge (shows +N when messages are waiting)
         self._badge = QLabel(self)
         self._badge.setStyleSheet(
-            "QLabel { color: #666; font-size: 11px; padding: 0 4px; }"
+            f"QLabel {{ color: {Colors.muted_text()}; font-size: 11px; padding: 0 4px; }}"
         )
         self._badge.hide()
         self._layout.addWidget(self._badge)
@@ -251,7 +252,7 @@ class MessageQueue(QWidget):
         # Create delimiter if there are existing messages
         if self._visible_messages:
             delimiter = QLabel(self.DELIMITER, self._message_container)
-            delimiter.setStyleSheet("color: #888;")
+            delimiter.setStyleSheet(f"color: {Colors.secondary_text()};")
             animated_msg.delimiter_label = delimiter
             delimiter.adjustSize()
             delimiter.show()
@@ -261,7 +262,7 @@ class MessageQueue(QWidget):
 
         # Create the message label
         label = QLabel(message, self._message_container)
-        label.setStyleSheet("color: #333;")
+        label.setStyleSheet(f"color: {Colors.primary_text()};")
         animated_msg.label = label
         label.adjustSize()
         label.show()

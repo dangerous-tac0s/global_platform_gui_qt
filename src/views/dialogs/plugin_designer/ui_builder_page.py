@@ -9,6 +9,8 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QCursor
+
+from ....utils.colors import Colors
 from PyQt5.QtWidgets import (
     QWizardPage,
     QVBoxLayout,
@@ -117,7 +119,7 @@ class FieldDefinitionDialog(QDialog):
         ])
         width_layout.addWidget(self._width_combo)
         width_hint = QLabel("(allows multiple fields per row)")
-        width_hint.setStyleSheet("color: #666; font-size: 10px;")
+        width_hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px;")
         width_layout.addWidget(width_hint)
         width_layout.addStretch()
         form.addRow("Width:", width_layout)
@@ -292,7 +294,7 @@ class DraggableFieldRow(QFrame):
 
         # Drag handle
         handle = QLabel("\u2630")  # Hamburger menu icon
-        handle.setStyleSheet("color: #888; font-size: 14px;")
+        handle.setStyleSheet(f"color: {Colors.secondary_text()}; font-size: 14px;")
         layout.addWidget(handle)
 
         # Label
@@ -306,7 +308,7 @@ class DraggableFieldRow(QFrame):
         # Width indicator if not full width
         if width_ratio < 1.0:
             width_label = QLabel(f"[{int(width_ratio * 100)}%]")
-            width_label.setStyleSheet("color: #888; font-size: 10px;")
+            width_label.setStyleSheet(f"color: {Colors.secondary_text()}; font-size: 10px;")
             layout.addWidget(width_label)
 
     def _update_style(self):
@@ -431,7 +433,7 @@ class TabbedFormPreviewWindow(QDialog):
         layout = QVBoxLayout(self)
 
         hint = QLabel("Preview of the installation dialog")
-        hint.setStyleSheet("color: #666; font-size: 10px; padding: 4px;")
+        hint.setStyleSheet(f"color: {Colors.muted_text()}; font-size: 10px; padding: 4px;")
         layout.addWidget(hint)
 
         self._tab_widget = QTabWidget()
@@ -439,7 +441,7 @@ class TabbedFormPreviewWindow(QDialog):
         layout.addWidget(self._tab_widget)
 
         self._placeholder = QLabel("(No fields defined)")
-        self._placeholder.setStyleSheet("color: gray; padding: 20px;")
+        self._placeholder.setStyleSheet(f"color: {Colors.muted_text()}; padding: 20px;")
         self._placeholder.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._placeholder)
         self._placeholder.hide()

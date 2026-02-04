@@ -9,6 +9,8 @@ from typing import Optional
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel
 from PyQt5.QtCore import QTimer, Qt
 
+from ...utils.colors import Colors
+
 
 class LoadingIndicator(QWidget):
     """
@@ -53,7 +55,7 @@ class LoadingIndicator(QWidget):
 
         # Message label
         self._message_label = QLabel("")
-        self._message_label.setStyleSheet("color: #888;")
+        self._message_label.setStyleSheet(f"color: {Colors.secondary_text()};")
         layout.addWidget(self._message_label)
 
         layout.addStretch()

@@ -36,6 +36,7 @@ from ...models.key_config import (
     is_ambiguous_length,
     get_ambiguous_display,
 )
+from ...utils.colors import Colors
 
 
 DEFAULT_KEY = "404142434445464748494A4B4C4D4E4F"
@@ -139,7 +140,7 @@ class ChangeKeyDialog(QDialog):
             "Losing your keys means permanent loss of card access."
         )
         warning.setWordWrap(True)
-        warning.setStyleSheet("color: #cc6600; font-style: italic;")
+        warning.setStyleSheet(f"color: {Colors.warning_text()}; font-style: italic;")
         layout.addWidget(warning)
 
         # Button box
