@@ -57,6 +57,10 @@ class HexInputDialog(QDialog):
 
     def _format_input(self):
         text = self.line_edit.text()
+        # Don't hex-format if user is typing "FIDESMO" keyword
+        stripped = text.replace(" ", "").upper()
+        if stripped.startswith("FIDE") or stripped == "FIDESMO":
+            return
         hex_only = re.sub(r"[^0-9a-fA-F]", "", text)  # remove non-hex chars
         # Insert space every two hex digits
         spaced = " ".join([hex_only[i : i + 2] for i in range(0, len(hex_only), 2)])
@@ -97,6 +101,12 @@ class HexInputDialog(QDialog):
 
     def _validate_and_accept(self):
         raw_text = self.line_edit.text().replace(" ", "")
+
+        # Special case: "FIDESMO" keyword bypasses hex validation
+        if raw_text.upper() == "FIDESMO":
+            self.hex_result = "FIDESMO"
+            self.accept()
+            return
 
         if not self._validate(raw_text):
             return

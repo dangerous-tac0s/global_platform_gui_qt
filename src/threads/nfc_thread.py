@@ -19,7 +19,7 @@ import chardet
 from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot
 from smartcard.System import readers
 
-from ..models.card import CardIdentifier
+from ..models.card import CardIdentifier, CardType, FIDESMO_PERSISTENT_TOTAL, FIDESMO_KEY_SENTINEL
 from ..events.event_bus import (
     EventBus,
     ErrorEvent,
@@ -83,6 +83,7 @@ class NFCHandlerThread(QThread):
     key_config_update_signal = pyqtSignal(str, object)  # card_id, KeyConfiguration
     card_removed_signal = pyqtSignal()
     cplc_retrieved_signal = pyqtSignal(str, str)  # uid, cplc_hash
+    fidesmo_mode_signal = pyqtSignal(bool)  # True when Fidesmo device detected
 
     def __init__(
         self,
@@ -125,8 +126,12 @@ class NFCHandlerThread(QThread):
         self.valid_card_detected: bool = False
         self._pending_key: Optional[str] = None  # Key waiting to be processed async
 
+        # Fidesmo support
+        self._card_type: CardType = CardType.UNKNOWN
+        self._fdsm_service = None  # Lazy-loaded FDSMService
+
         # Storage tracking
-        self.storage = {"persistent": -1, "transient": -1}
+        self.storage = {"persistent": -1, "transient": -1, "persistent_total": -1}
 
         # GlobalPlatformPro command paths
         self.gp = {
@@ -144,6 +149,38 @@ class NFCHandlerThread(QThread):
         if self.current_identifier:
             return self.current_identifier.primary_id
         return self.current_uid
+
+    @property
+    def card_type(self) -> CardType:
+        """Get the current card type."""
+        return self._card_type
+
+    @property
+    def is_fidesmo(self) -> bool:
+        """Check if the current card is a Fidesmo device."""
+        return self._card_type == CardType.FIDESMO
+
+    def _get_fdsm_service(self):
+        """Lazy-load FDSMService instance."""
+        if self._fdsm_service is None:
+            from ..services.fdsm_service import FDSMService
+            self._fdsm_service = FDSMService()
+        return self._fdsm_service
+
+    def _get_fidesmo_auth(self):
+        """Get Fidesmo auth token and app ID from secure storage."""
+        auth_token = None
+        app_id = None
+        try:
+            if hasattr(self.app, 'secure_storage') and self.app.secure_storage:
+                fidesmo = self.app.secure_storage.get("fidesmo")
+                if fidesmo:
+                    auth_token = fidesmo.get("auth_token")
+            if hasattr(self.app, 'config') and self.app.config:
+                app_id = self.app.config.get("fidesmo_app_id")
+        except Exception:
+            pass
+        return auth_token, app_id
 
     # =========================================================================
     # Thread Control
@@ -227,8 +264,10 @@ class NFCHandlerThread(QThread):
                         self._pending_key = None  # Clear any pending key operation
                         self.card_detected = False
                         self.valid_card_detected = False
+                        self._card_type = CardType.UNKNOWN
 
                         self.card_removed_signal.emit()
+                        self.fidesmo_mode_signal.emit(False)
                         self.card_present_signal.emit(False)
                         self._emit_card_presence(False, None)
                         self.title_bar_signal.emit(self.make_title_bar_string())
@@ -387,6 +426,8 @@ class NFCHandlerThread(QThread):
     def is_jcop3(self, reader_name: str) -> bool:
         """Check if the card is JavaCard v3."""
         try:
+            if self.is_fidesmo:
+                return False  # Fidesmo devices don't use GP commands
             if (
                 self.key is None
                 or self.app.config["known_tags"].get(self.current_uid, None) is None
@@ -470,10 +511,11 @@ class NFCHandlerThread(QThread):
         else:
             uid_display = self.current_uid
 
+        fidesmo_tag = " [Fidesmo]" if self.is_fidesmo else ""
         key_status = "🔓" if self.key else "🔒"
         memory_str = self.get_memory_status()
 
-        return f"{base} - {uid_display} {key_status} {memory_str}"
+        return f"{base} - {uid_display}{fidesmo_tag} {key_status} {memory_str}"
 
     def get_memory_status(self) -> str:
         """Get memory status string."""
@@ -493,12 +535,23 @@ class NFCHandlerThread(QThread):
         if memory is None or memory == -1:
             self.storage["persistent"] = -1
             self.storage["transient"] = -1
+            self.storage["persistent_total"] = -1
             return
 
         self.storage["persistent"] = memory["persistent"]["free"]
+        self.storage["persistent_total"] = memory["persistent"]["total"]
         self.storage["transient"] = (
             memory["transient"]["reset_free"] + memory["transient"]["deselect_free"]
         )
+
+        # Check for Fidesmo device based on persistent_total
+        if (
+            FIDESMO_PERSISTENT_TOTAL is not None
+            and self.storage.get("persistent_total") == FIDESMO_PERSISTENT_TOTAL
+            and self._card_type == CardType.UNKNOWN
+        ):
+            self._card_type = CardType.FIDESMO
+            self.fidesmo_mode_signal.emit(True)
 
     def _get_reader_index(self) -> int:
         """Get the index of the selected reader."""
@@ -533,10 +586,14 @@ class NFCHandlerThread(QThread):
         Called from UI when user submits key. Sets a pending flag
         that the NFC thread's polling loop will process asynchronously.
         """
-        self.key = key
-        if self.key is not None:
-            # Set flag for async processing by the NFC thread
-            self._pending_key = key
+        # Check for Fidesmo mode override
+        if key == FIDESMO_KEY_SENTINEL:
+            self._card_type = CardType.FIDESMO
+            self.key = None  # Fidesmo doesn't use a GP key
+        else:
+            self.key = key
+        # Set flag for async processing by the NFC thread
+        self._pending_key = key
 
     def _process_pending_key(self):
         """
@@ -552,21 +609,27 @@ class NFCHandlerThread(QThread):
         installed = {}
 
         try:
-            # Retrieve CPLC data and update identifier
-            self.retrieve_cplc_and_update_identifier()
-
-            # Update memory status
             reader_idx = self._get_reader_index()
+            # Read memory FIRST — this is a raw APDU that doesn't require
+            # GP authentication, and can detect Fidesmo devices via
+            # persistent_total before we send any GP commands to the card.
             self.update_memory(reader_idx)
 
-            # Emit signal to store key under CPLC (if not already done by retrieve_cplc)
-            if self.current_identifier and self.current_identifier.cplc_hash:
-                real_uid = (
-                    self.current_uid if self.current_uid != "__CONTACT_CARD__" else None
-                )
-                self.cplc_retrieved_signal.emit(
-                    real_uid or "", self.current_identifier.cplc_hash
-                )
+            if self.is_fidesmo:
+                # Fidesmo path - skip GP authentication entirely
+                self.key = None  # Clear any GP key — Fidesmo doesn't use one
+                self.fidesmo_mode_signal.emit(True)
+            else:
+                # Standard GP path - existing logic
+                self.retrieve_cplc_and_update_identifier()
+
+                if self.current_identifier and self.current_identifier.cplc_hash:
+                    real_uid = (
+                        self.current_uid if self.current_uid != "__CONTACT_CARD__" else None
+                    )
+                    self.cplc_retrieved_signal.emit(
+                        real_uid or "", self.current_identifier.cplc_hash
+                    )
 
             self.title_bar_signal.emit(self.make_title_bar_string())
             installed = self.get_installed_apps(_internal=True)  # _internal=True since we're on NFC thread
@@ -609,6 +672,10 @@ class NFCHandlerThread(QThread):
             old_config: Current config if using separate keys for auth
         """
         from ..models.key_config import KeyMode
+
+        if self.is_fidesmo:
+            self._emit_error("Key changes are not supported on Fidesmo devices")
+            return
 
         storage_key = self.card_id if self.card_id != "__CONTACT_CARD__" else None
 
@@ -676,6 +743,8 @@ class NFCHandlerThread(QThread):
             error_preface: Prefix for error messages
             max_retries: Number of retries for transient errors
         """
+        if self.is_fidesmo:
+            return -1
         if not self.selected_reader_name:
             return -1
 
@@ -730,8 +799,8 @@ class NFCHandlerThread(QThread):
             error_preface: Prefix for error messages
             max_retries: Number of retries for transient errors like SCARD_E_NOT_TRANSACTED
         """
-        if not self.key:
-            return None  # Protect unknown tags
+        if not self.key or self.is_fidesmo:
+            return None  # Protect unknown tags and Fidesmo devices
 
         # Transient errors that can be retried
         transient_errors = [
@@ -789,6 +858,9 @@ class NFCHandlerThread(QThread):
             self._emit_status("No reader selected for get_installed_apps.")
             return {}
 
+        if self.is_fidesmo:
+            return self._get_installed_apps_fdsm(_internal)
+
         if not _internal:
             self.pause()
             self._paused_ack.wait(timeout=1.0)
@@ -841,6 +913,24 @@ class NFCHandlerThread(QThread):
 
         except Exception as e:
             self._emit_error(f"Exception listing apps: {e}")
+            return {}
+        finally:
+            if not _internal:
+                self.resume()
+
+    def _get_installed_apps_fdsm(self, _internal=False):
+        """Get installed apps from Fidesmo device via FDSM."""
+        if not self.selected_reader_name:
+            return {}
+        if not _internal:
+            self.pause()
+            self._paused_ack.wait(timeout=1.0)
+        try:
+            fdsm = self._get_fdsm_service()
+            auth_token, _ = self._get_fidesmo_auth()
+            return fdsm.list_applets(self.selected_reader_name, auth_token=auth_token)
+        except Exception as e:
+            self._emit_error(f"FDSM list error: {e}")
             return {}
         finally:
             if not _internal:
@@ -936,6 +1026,9 @@ class NFCHandlerThread(QThread):
             self._emit_operation_result(False, "No reader selected.")
             return
 
+        if self.is_fidesmo:
+            return self._install_app_fdsm(cap_file_path, params)
+
         self.pause()
         self._paused_ack.wait(timeout=1.0)
 
@@ -988,6 +1081,47 @@ class NFCHandlerThread(QThread):
             self.title_bar_signal.emit(self.make_title_bar_string())
             self.resume()
 
+    def _install_app_fdsm(self, cap_file_path, params=None):
+        """Install an applet on a Fidesmo device via FDSM."""
+        if not self.selected_reader_name:
+            self._emit_error("No reader selected")
+            return -1
+
+        self.pause()
+        self._paused_ack.wait(timeout=1.0)
+
+        try:
+            fdsm = self._get_fdsm_service()
+            auth_token, app_id = self._get_fidesmo_auth()
+
+            # Extract params string if params is a dict (from plugin dialog)
+            params_str = None
+            if isinstance(params, dict):
+                params_str = params.get("param_string") or params.get("params")
+            elif isinstance(params, str):
+                params_str = params
+
+            result = fdsm.install_applet(
+                reader=self.selected_reader_name,
+                cap_path=cap_file_path,
+                auth_token=auth_token,
+                app_id=app_id,
+                params=params_str,
+            )
+
+            if result.success:
+                installed = self.get_installed_apps(_internal=True)
+                self.installed_apps_updated_signal.emit(installed)
+                return 0
+            else:
+                self._emit_error(f"FDSM install failed: {result.stderr}")
+                return -1
+        except Exception as e:
+            self._emit_error(f"FDSM install error: {e}")
+            return -1
+        finally:
+            self.resume()
+
     # =========================================================================
     # Uninstallation
     # =========================================================================
@@ -1006,6 +1140,9 @@ class NFCHandlerThread(QThread):
         if not self.selected_reader_name:
             self._emit_operation_result(False, "No reader selected.")
             return
+
+        if self.is_fidesmo:
+            return self._uninstall_app_fdsm(aid, force)
 
         if not _internal:
             self.pause()
@@ -1054,6 +1191,38 @@ class NFCHandlerThread(QThread):
             if not _internal:
                 self.resume()
 
+    def _uninstall_app_fdsm(self, aid, force=False):
+        """Uninstall an applet from a Fidesmo device via FDSM."""
+        if not self.selected_reader_name:
+            self._emit_error("No reader selected")
+            return -1
+
+        self.pause()
+        self._paused_ack.wait(timeout=1.0)
+
+        try:
+            fdsm = self._get_fdsm_service()
+            auth_token, app_id = self._get_fidesmo_auth()
+            result = fdsm.uninstall_applet(
+                reader=self.selected_reader_name,
+                target=aid,
+                auth_token=auth_token,
+                app_id=app_id,
+            )
+
+            if result.success:
+                installed = self.get_installed_apps(_internal=True)
+                self.installed_apps_updated_signal.emit(installed)
+                return 0
+            else:
+                self._emit_error(f"FDSM uninstall failed: {result.stderr}")
+                return -1
+        except Exception as e:
+            self._emit_error(f"FDSM uninstall error: {e}")
+            return -1
+        finally:
+            self.resume()
+
     def uninstall_app_by_cap(
         self,
         cap_file_path: str,
@@ -1068,6 +1237,12 @@ class NFCHandlerThread(QThread):
             fallback_aid: AID to use if CAP uninstall fails
             force: Force deletion
         """
+        if self.is_fidesmo:
+            if fallback_aid:
+                return self.uninstall_app(fallback_aid, force=force)
+            self._emit_operation_result(False, "CAP-based uninstall not supported on Fidesmo devices")
+            return
+
         if not self.selected_reader_name:
             self._emit_operation_result(False, "No reader selected.")
             return
