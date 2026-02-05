@@ -493,10 +493,15 @@ class GPManagerApp(QMainWindow):
         self._no_readers_action.setEnabled(False)
         self.readers_menu.addAction(self._no_readers_action)
 
-        fidesmo_menu = self.menu_bar.addMenu("Fidesmo")
-        browse_store_action = QAction("Browse Fidesmo Store...", self)
-        browse_store_action.triggered.connect(self._browse_fidesmo_store)
-        fidesmo_menu.addAction(browse_store_action)
+        self.fidesmo_menu = self.menu_bar.addMenu("Fidesmo")
+        self._browse_store_action = QAction("Browse Fidesmo Store...", self)
+        self._browse_store_action.triggered.connect(self._browse_fidesmo_store)
+        self.fidesmo_menu.addAction(self._browse_store_action)
+
+        # Check Java availability for FDSM/Fidesmo support
+        self._java_info = None
+        self._fdsm_available = False
+        QTimer.singleShot(0, self._check_java_for_fdsm)
 
         self.config = self.load_config()
         self.write_config()
@@ -2546,10 +2551,43 @@ class GPManagerApp(QMainWindow):
         else:
             self.setWindowTitle(APP_TITLE)
 
+    def _check_java_for_fdsm(self):
+        """Check Java installation and version for FDSM/Fidesmo support."""
+        from src.services.fdsm_service import check_java, get_java_download_url, FDSM_MIN_JAVA_VERSION
+
+        self._java_info = check_java()
+
+        if not self._java_info.installed:
+            self._fdsm_available = False
+            self.fidesmo_menu.setEnabled(False)
+            self._browse_store_action.setText("Browse Fidesmo Store... (Java required)")
+            url = get_java_download_url()
+            self.message_queue.add_message(
+                f"Java not found. Fidesmo features disabled. Install Java {FDSM_MIN_JAVA_VERSION}+: {url}"
+            )
+        elif not self._java_info.sufficient_for_fdsm:
+            self._fdsm_available = False
+            self.fidesmo_menu.setEnabled(False)
+            self._browse_store_action.setText(
+                f"Browse Fidesmo Store... (Java {FDSM_MIN_JAVA_VERSION}+ required)"
+            )
+            url = get_java_download_url()
+            self.message_queue.add_message(
+                f"Java {self._java_info.version_string} found, but Fidesmo requires {FDSM_MIN_JAVA_VERSION}+. "
+                f"Upgrade: {url}"
+            )
+        else:
+            self._fdsm_available = True
+
     def _on_fidesmo_mode_changed(self, is_fidesmo: bool):
         """Handle transition to/from Fidesmo mode."""
         self._fidesmo_mode = is_fidesmo
         if is_fidesmo:
+            if not self._fdsm_available:
+                self.message_queue.add_message(
+                    "Fidesmo device detected, but FDSM is unavailable (Java 21+ required)."
+                )
+                return
             self.message_queue.add_message("Fidesmo device detected. Using FDSM for operations.")
             self._fetch_fidesmo_store_apps()
         else:
@@ -2640,6 +2678,17 @@ class GPManagerApp(QMainWindow):
 
     def _browse_fidesmo_store(self):
         """Show a dialog listing available Fidesmo store apps (no card needed)."""
+        if not self._fdsm_available:
+            from src.services.fdsm_service import get_java_download_url, FDSM_MIN_JAVA_VERSION
+            url = get_java_download_url()
+            QMessageBox.warning(
+                self,
+                "Java Required",
+                f"Fidesmo features require Java {FDSM_MIN_JAVA_VERSION} or newer.\n\n"
+                f"Download: {url}",
+            )
+            return
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Fidesmo App Store")
         dialog.setMinimumSize(500, 400)

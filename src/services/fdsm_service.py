@@ -7,12 +7,80 @@ applets, and querying the Fidesmo app store.
 """
 
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 from .gp_service import GPResult, resource_path
+
+# Minimum Java version required by FDSM
+FDSM_MIN_JAVA_VERSION = 21
+
+
+@dataclass
+class JavaInfo:
+    """Result of a Java installation check."""
+    installed: bool = False
+    version: Optional[int] = None  # Major version (e.g., 21)
+    version_string: Optional[str] = None  # Full version string (e.g., "21.0.2")
+    sufficient_for_fdsm: bool = False
+    error: Optional[str] = None
+
+
+def check_java() -> JavaInfo:
+    """Check if Java is installed and meets FDSM's minimum version requirement."""
+    try:
+        result = subprocess.run(
+            ["java", "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        # java -version outputs to stderr
+        output = result.stderr or result.stdout or ""
+        # Parse version from strings like:
+        #   openjdk version "21.0.2" 2024-01-16
+        #   java version "1.8.0_381"
+        match = re.search(r'version "(\d+)(?:\.(\d+))?(?:\.(\d+))?', output)
+        if match:
+            major = int(match.group(1))
+            # Java 1.x convention: "1.8" means Java 8
+            if major == 1 and match.group(2):
+                major = int(match.group(2))
+            version_string = match.group(0).replace('version "', '').rstrip('"')
+            return JavaInfo(
+                installed=True,
+                version=major,
+                version_string=version_string,
+                sufficient_for_fdsm=major >= FDSM_MIN_JAVA_VERSION,
+            )
+        # Java found but couldn't parse version
+        return JavaInfo(
+            installed=True,
+            version=None,
+            version_string=output.split("\n")[0].strip(),
+            sufficient_for_fdsm=False,
+            error="Could not parse Java version",
+        )
+    except FileNotFoundError:
+        return JavaInfo(installed=False, error="Java is not installed")
+    except subprocess.TimeoutExpired:
+        return JavaInfo(installed=False, error="Java version check timed out")
+    except Exception as e:
+        return JavaInfo(installed=False, error=str(e))
+
+
+def get_java_download_url() -> str:
+    """Get the appropriate Java download URL for the current OS."""
+    system = sys.platform
+    if system == "win32":
+        return "https://adoptium.net/temurin/releases/?os=windows&arch=x64&package=jdk&version=21"
+    elif system == "darwin":
+        return "https://adoptium.net/temurin/releases/?os=mac&arch=aarch64&package=jdk&version=21"
+    else:
+        return "https://adoptium.net/temurin/releases/?os=linux&arch=x64&package=jdk&version=21"
 
 
 @dataclass
