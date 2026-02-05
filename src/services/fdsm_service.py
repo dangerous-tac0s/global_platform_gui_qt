@@ -303,7 +303,10 @@ class FDSMService:
             timeout=30,
         )
         if not result.success:
-            return []
+            error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+            if "UnsupportedClassVersionError" in error_msg or "class file version" in error_msg:
+                raise RuntimeError("FDSM requires Java 21 or newer. Please update your Java installation.")
+            raise RuntimeError(f"FDSM store query failed: {error_msg}")
         return self._parse_store_apps_output(result.stdout)
 
     def _parse_store_apps_output(self, output: str) -> List[FidesmoStoreApp]:
