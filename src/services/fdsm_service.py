@@ -72,17 +72,6 @@ def check_java() -> JavaInfo:
         return JavaInfo(installed=False, error=str(e))
 
 
-def get_java_download_url() -> str:
-    """Get the appropriate Java download URL for the current OS."""
-    system = sys.platform
-    if system == "win32":
-        return "https://adoptium.net/temurin/releases/?os=windows&arch=x64&package=jdk&version=21"
-    elif system == "darwin":
-        return "https://adoptium.net/temurin/releases/?os=mac&arch=aarch64&package=jdk&version=21"
-    else:
-        return "https://adoptium.net/temurin/releases/?os=linux&arch=x64&package=jdk&version=21"
-
-
 @dataclass
 class FidesmoStoreApp:
     """An application available from the Fidesmo app store."""
