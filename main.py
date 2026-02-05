@@ -2562,8 +2562,11 @@ class GPManagerApp(QMainWindow):
             self.fidesmo_menu.setEnabled(False)
             self._browse_store_action.setText("Browse Fidesmo Store... (Java required)")
             url = get_java_download_url()
-            self.message_queue.add_message(
-                f"Java not found. Fidesmo features disabled. Install Java {FDSM_MIN_JAVA_VERSION}+: {url}"
+            QMessageBox.warning(
+                self,
+                "Java Not Found",
+                f"Java is not installed. Fidesmo features have been disabled.\n\n"
+                f"To use Fidesmo, install Java {FDSM_MIN_JAVA_VERSION} or newer:\n{url}",
             )
         elif not self._java_info.sufficient_for_fdsm:
             self._fdsm_available = False
@@ -2572,9 +2575,13 @@ class GPManagerApp(QMainWindow):
                 f"Browse Fidesmo Store... (Java {FDSM_MIN_JAVA_VERSION}+ required)"
             )
             url = get_java_download_url()
-            self.message_queue.add_message(
-                f"Java {self._java_info.version_string} found, but Fidesmo requires {FDSM_MIN_JAVA_VERSION}+. "
-                f"Upgrade: {url}"
+            QMessageBox.warning(
+                self,
+                "Java Update Required",
+                f"Java {self._java_info.version_string} was found, but Fidesmo requires "
+                f"Java {FDSM_MIN_JAVA_VERSION} or newer.\n\n"
+                f"Fidesmo features have been disabled.\n\n"
+                f"Upgrade Java: {url}",
             )
         else:
             self._fdsm_available = True
@@ -2584,8 +2591,14 @@ class GPManagerApp(QMainWindow):
         self._fidesmo_mode = is_fidesmo
         if is_fidesmo:
             if not self._fdsm_available:
-                self.message_queue.add_message(
-                    "Fidesmo device detected, but FDSM is unavailable (Java 21+ required)."
+                from src.services.fdsm_service import get_java_download_url, FDSM_MIN_JAVA_VERSION
+                url = get_java_download_url()
+                QMessageBox.warning(
+                    self,
+                    "Fidesmo Device Detected",
+                    f"A Fidesmo device was detected, but Java {FDSM_MIN_JAVA_VERSION}+ "
+                    f"is required for Fidesmo operations.\n\n"
+                    f"Install or upgrade Java: {url}",
                 )
                 return
             self.message_queue.add_message("Fidesmo device detected. Using FDSM for operations.")
