@@ -2562,11 +2562,11 @@ class GPManagerApp(QMainWindow):
             self.fidesmo_menu.setEnabled(False)
             self._browse_store_action.setText("Browse Fidesmo Store... (Java required)")
             url = get_java_download_url()
-            QMessageBox.warning(
-                self,
+            self._show_java_warning(
                 "Java Not Found",
-                f"Java is not installed. Fidesmo features have been disabled.\n\n"
-                f"To use Fidesmo, install Java {FDSM_MIN_JAVA_VERSION} or newer:\n{url}",
+                f"Java is not installed. Fidesmo features have been disabled.<br><br>"
+                f"To use Fidesmo, install Java {FDSM_MIN_JAVA_VERSION} or newer:<br><br>"
+                f'<a href="{url}">Download Eclipse Temurin JDK {FDSM_MIN_JAVA_VERSION}</a>',
             )
         elif not self._java_info.sufficient_for_fdsm:
             self._fdsm_available = False
@@ -2575,16 +2575,24 @@ class GPManagerApp(QMainWindow):
                 f"Browse Fidesmo Store... (Java {FDSM_MIN_JAVA_VERSION}+ required)"
             )
             url = get_java_download_url()
-            QMessageBox.warning(
-                self,
+            self._show_java_warning(
                 "Java Update Required",
                 f"Java {self._java_info.version_string} was found, but Fidesmo requires "
-                f"Java {FDSM_MIN_JAVA_VERSION} or newer.\n\n"
-                f"Fidesmo features have been disabled.\n\n"
-                f"Upgrade Java: {url}",
+                f"Java {FDSM_MIN_JAVA_VERSION} or newer.<br><br>"
+                f"Fidesmo features have been disabled.<br><br>"
+                f'<a href="{url}">Download Eclipse Temurin JDK {FDSM_MIN_JAVA_VERSION}</a>',
             )
         else:
             self._fdsm_available = True
+
+    def _show_java_warning(self, title: str, message: str):
+        """Show a warning dialog with a clickable URL."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle(title)
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(message)
+        msg.exec_()
 
     def _on_fidesmo_mode_changed(self, is_fidesmo: bool):
         """Handle transition to/from Fidesmo mode."""
@@ -2593,12 +2601,11 @@ class GPManagerApp(QMainWindow):
             if not self._fdsm_available:
                 from src.services.fdsm_service import get_java_download_url, FDSM_MIN_JAVA_VERSION
                 url = get_java_download_url()
-                QMessageBox.warning(
-                    self,
+                self._show_java_warning(
                     "Fidesmo Device Detected",
                     f"A Fidesmo device was detected, but Java {FDSM_MIN_JAVA_VERSION}+ "
-                    f"is required for Fidesmo operations.\n\n"
-                    f"Install or upgrade Java: {url}",
+                    f"is required for Fidesmo operations.<br><br>"
+                    f'<a href="{url}">Download Eclipse Temurin JDK {FDSM_MIN_JAVA_VERSION}</a>',
                 )
                 return
             self.message_queue.add_message("Fidesmo device detected. Using FDSM for operations.")
@@ -2694,11 +2701,10 @@ class GPManagerApp(QMainWindow):
         if not self._fdsm_available:
             from src.services.fdsm_service import get_java_download_url, FDSM_MIN_JAVA_VERSION
             url = get_java_download_url()
-            QMessageBox.warning(
-                self,
+            self._show_java_warning(
                 "Java Required",
-                f"Fidesmo features require Java {FDSM_MIN_JAVA_VERSION} or newer.\n\n"
-                f"Download: {url}",
+                f"Fidesmo features require Java {FDSM_MIN_JAVA_VERSION} or newer.<br><br>"
+                f'<a href="{url}">Download Eclipse Temurin JDK {FDSM_MIN_JAVA_VERSION}</a>',
             )
             return
 
