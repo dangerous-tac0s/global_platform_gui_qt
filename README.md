@@ -7,11 +7,9 @@ Tons of credit go to [@Stargate01](https://github.com/stargate01), [@GrimEcho](h
 Looking for more information? Check out the [flexSecure repo docs](https://github.com/DangerousThings/flexsecure-applets/tree/master/docs).
 
 > [!CAUTION]
-> Disclaimer: Use at your own risk. I'm not liable for bricked chips.<br />
-> DO NOT USE ON APEX DEVICES--THE DEVICE WILL BE BRICKED!
-> <br />
-> <br />
-> Now that we got that over. The risk is no greater than using Global Platform Pro.
+> Disclaimer: Use at your own risk. I'm not liable for bricked chips.
+>
+> The risk is no greater than using Global Platform Pro.
 > During every call to gp, this app checks its config to see if the smart card
 > scanned: A, has been scanned before, and B, has a default key. If either condition
 > is false, it bails. However, if you give it an incorrect key, it will send it. Enough
@@ -44,6 +42,11 @@ Looking for more information? Check out the [flexSecure repo docs](https://githu
   - Export encrypted backups with password or GPG encryption
   - Import backups with conflict resolution
   - Change encryption method (System Keyring or GPG)
+- **VivoKey Apex / Fidesmo Support**
+  - Auto-detection of Fidesmo-based devices
+  - Browse and install apps from the Fidesmo store
+  - Install custom CAP files via FDSM (with Fidesmo auth token)
+  - Manage installed applets (list, uninstall)
 
 <img src="card_detected.png" width=350 /><br />
 
@@ -69,7 +72,7 @@ Check the [latest release](https://github.com/DangerousThings/global-platform-gu
 Requirements:
 - **Python 3.9+** (Linux/macOS)
 - **Python 3.9 only** (Windows) - PyQt5 wheels for Windows require Python 3.9
-- Java (for GlobalPlatformPro)
+- Java 8+ (for GlobalPlatformPro), Java 21+ (for Fidesmo/FDSM support)
 
 > [!IMPORTANT]
 > **Windows users**: You must use Python 3.9 and `requirements-win.txt`. The main `requirements.txt` contains Linux-only packages (SecretStorage, jeepney) that will fail to install on Windows.
@@ -235,16 +238,47 @@ To switch between System Keyring and GPG encryption:
 > [!NOTE]
 > Changing the encryption method re-encrypts all stored data. Make sure you have a backup first.
 
+## VivoKey Apex / Fidesmo Devices
+
+Global Platform GUI supports [Fidesmo](https://fidesmo.com/)-based devices like the **VivoKey Apex** using [FDSM](https://github.com/niclas-1/fdsm) instead of GlobalPlatform Pro.
+
+### How Detection Works
+
+When a card is presented, the app reads the JavaCard memory applet and compares the `persistent_total` value against a known Fidesmo fingerprint. If it matches, a confirmation dialog asks whether to enable Fidesmo mode.
+
+Once confirmed, the card is remembered and will automatically enter Fidesmo mode on future scans.
+
+> [!WARNING]
+> Auto-detection relies on a specific memory value (`persistent_total = 84336`). If your device has a different memory profile (e.g., after significant applet installation), detection may not trigger automatically. Use the manual override described below.
+
+### Manual Override
+
+If auto-detection does not recognize your Fidesmo device, you can manually enable Fidesmo mode:
+
+1. When prompted for a key, type **`FIDESMO`** (not a hex key)
+2. Confirm the Fidesmo mode dialog
+3. The app will remember this card for future use
+
+### Requirements
+
+- **Java 21+** is required for FDSM (GlobalPlatform Pro works with Java 8+)
+- `fdsm.jar` must be present in the application directory
+- A **Fidesmo auth token** is required to install or uninstall apps (configure in **Settings > Fidesmo**)
+- Browsing the Fidesmo store and listing installed apps works without authentication
+
+### Fidesmo Store + GP Plugins
+
+When a Fidesmo auth token is configured, the available apps list shows both Fidesmo store apps and standard GP plugins (label: "Fidesmo Apps+"). Without a token, only Fidesmo store apps are shown (label: "Fidesmo Apps"). GP plugins can be installed on Fidesmo devices via FDSM's `--install` command, which uploads the CAP file to the Fidesmo backend for installation.
+
 ## Known Issues
 
 - No real validation for URI record creation
 
 ## Roadmap
 
-- [ ] App version display in detail pane
 - [ ] Encrypted NDEF records
 - [ ] Multiple NDEF records
 - [ ] MIME records
-- [ ] Status.im support
-- [ ] CAP file caching
+- [x] VivoKey Apex / Fidesmo support
+- [x] CAP file caching
 - [x] Export/backup of app config and secure storage

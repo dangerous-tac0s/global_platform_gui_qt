@@ -7,9 +7,57 @@ import platform
 import pprint
 import sys
 import os
+import subprocess
 import tempfile
 import textwrap
 import time
+
+
+def _ensure_tools_on_path():
+    """Augment PATH so external tools (Java, GPG) are discoverable.
+
+    GUI apps on macOS (launched from Finder/Dock) and packaged Windows
+    executables often inherit a minimal PATH that excludes directories
+    where Homebrew, Gpg4win, or JDK installers place their binaries.
+    """
+    system = platform.system()
+    path = os.environ.get("PATH", "")
+    path_entries = path.split(os.pathsep)
+    dirs_to_add = []
+
+    def _add(d):
+        if d not in path_entries and os.path.isdir(d):
+            dirs_to_add.append(d)
+
+    if system == "Darwin":
+        # Homebrew (Apple Silicon + Intel)
+        _add("/opt/homebrew/bin")
+        _add("/usr/local/bin")
+
+        # JDK installed via .pkg (Oracle, Adoptium, etc.)
+        try:
+            java_home = subprocess.run(
+                ["/usr/libexec/java_home"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if java_home.returncode == 0:
+                _add(os.path.join(java_home.stdout.strip(), "bin"))
+        except Exception:
+            pass
+
+    elif system == "Windows":
+        # Gpg4win default install locations
+        for prog in (
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        ):
+            _add(os.path.join(prog, "GnuPG", "bin"))
+
+    if dirs_to_add:
+        os.environ["PATH"] = os.pathsep.join(dirs_to_add) + os.pathsep + path
+
+
+_ensure_tools_on_path()
 
 import gnupg
 
