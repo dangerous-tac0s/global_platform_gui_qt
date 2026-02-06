@@ -370,31 +370,33 @@ class FDSMService:
         """
         Parse fdsm --store-apps output.
 
-        Expected format (best-effort, will be refined with real output):
-        Lines with app name and ID information.
+        Actual format:
+            #  appId - name and vendor
+            f374c57e - Fidesmo Pay (by Fidesmo AB)
+                       Services: install, activate, ...
         """
         apps: List[FidesmoStoreApp] = []
+        current_app: Optional[FidesmoStoreApp] = None
+
         for line in output.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
+            if line.startswith("#") or not line.strip():
                 continue
-            # Best-effort parsing - split on common delimiters
-            # Format may be: "AppName  app_id  version  state"
-            # or: "app_id AppName"
-            parts = line.split("\t") if "\t" in line else line.split("  ")
-            parts = [p.strip() for p in parts if p.strip()]
-            if len(parts) >= 2:
-                apps.append(FidesmoStoreApp(
-                    name=parts[0],
-                    app_id=parts[1],
-                    version=parts[2] if len(parts) > 2 else None,
-                    state=parts[3] if len(parts) > 3 else None,
-                ))
-            elif len(parts) == 1:
-                apps.append(FidesmoStoreApp(
-                    name=parts[0],
-                    app_id=parts[0],
-                ))
+
+            # App lines start with hex app_id (no leading whitespace)
+            if not line[0].isspace():
+                # Parse: "f374c57e - Fidesmo Pay (by Fidesmo AB)"
+                match = re.match(r'^([0-9a-fA-F]+)\s*-\s*(.+)$', line.strip())
+                if match:
+                    current_app = FidesmoStoreApp(
+                        app_id=match.group(1),
+                        name=match.group(2).strip(),
+                    )
+                    apps.append(current_app)
+            elif current_app and "Services:" in line:
+                # Parse: "           Services: install, destroy"
+                services = line.split("Services:", 1)[1].strip()
+                current_app.description = services
+
         return apps
 
     def run_service(
