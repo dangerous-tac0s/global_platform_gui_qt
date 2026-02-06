@@ -84,6 +84,7 @@ class NFCHandlerThread(QThread):
     card_removed_signal = pyqtSignal()
     cplc_retrieved_signal = pyqtSignal(str, str)  # uid, cplc_hash
     fidesmo_mode_signal = pyqtSignal(bool)  # True when Fidesmo device detected
+    fidesmo_confirm_signal = pyqtSignal()  # Ask user to confirm Fidesmo mode
 
     def __init__(
         self,
@@ -244,8 +245,27 @@ class NFCHandlerThread(QThread):
                         # Check if JCOP and get key
                         if self.is_jcop(self.selected_reader_name):
                             self.valid_card_detected = True
-                            self._emit_status("Compatible card present.")
-                            self.get_key()
+
+                            # Read memory before key prompt — can detect
+                            # Fidesmo devices via persistent_total without
+                            # any GP authentication.
+                            try:
+                                reader_idx = self._get_reader_index()
+                                self.update_memory(reader_idx)
+                            except Exception:
+                                pass  # Memory read failed, proceed normally
+
+                            if (
+                                FIDESMO_PERSISTENT_TOTAL is not None
+                                and self.storage.get("persistent_total") == FIDESMO_PERSISTENT_TOTAL
+                                and self._card_type == CardType.UNKNOWN
+                            ):
+                                # Potential Fidesmo device — ask user before proceeding
+                                self._emit_status("Potential Fidesmo device detected.")
+                                self.fidesmo_confirm_signal.emit()
+                            else:
+                                self._emit_status("Compatible card present.")
+                                self.get_key()
                         else:
                             self.valid_card_detected = False
                             self._emit_status("Unsupported card present.")
@@ -267,7 +287,10 @@ class NFCHandlerThread(QThread):
                         self._card_type = CardType.UNKNOWN
 
                         self.card_removed_signal.emit()
-                        self.fidesmo_mode_signal.emit(False)
+                        # Don't emit fidesmo_mode_signal(False) here — NFC flicker
+                        # during FDSM I/O causes a false "card removed" that would
+                        # disable Fidesmo UI.  Fidesmo mode is exited explicitly
+                        # when a GP card is processed in _process_pending_key().
                         self.card_present_signal.emit(False)
                         self._emit_card_presence(False, None)
                         self.title_bar_signal.emit(self.make_title_bar_string())
@@ -544,15 +567,6 @@ class NFCHandlerThread(QThread):
             memory["transient"]["reset_free"] + memory["transient"]["deselect_free"]
         )
 
-        # Check for Fidesmo device based on persistent_total
-        if (
-            FIDESMO_PERSISTENT_TOTAL is not None
-            and self.storage.get("persistent_total") == FIDESMO_PERSISTENT_TOTAL
-            and self._card_type == CardType.UNKNOWN
-        ):
-            self._card_type = CardType.FIDESMO
-            self.fidesmo_mode_signal.emit(True)
-
     def _get_reader_index(self) -> int:
         """Get the index of the selected reader."""
         try:
@@ -608,18 +622,25 @@ class NFCHandlerThread(QThread):
         self._pending_key = None
         installed = {}
 
+        # Emit mode signal BEFORE any card I/O so the UI updates
+        # regardless of whether subsequent reads succeed.
+        if self.is_fidesmo:
+            self.key = None  # Clear any GP key — Fidesmo doesn't use one
+            real_uid = (
+                self.current_uid if self.current_uid != "__CONTACT_CARD__" else None
+            )
+            if real_uid:
+                self.current_identifier = CardIdentifier(uid=real_uid)
+            self.fidesmo_mode_signal.emit(True)
+        else:
+            # GP card — exit Fidesmo mode if it was active
+            self.fidesmo_mode_signal.emit(False)
+
         try:
             reader_idx = self._get_reader_index()
-            # Read memory FIRST — this is a raw APDU that doesn't require
-            # GP authentication, and can detect Fidesmo devices via
-            # persistent_total before we send any GP commands to the card.
             self.update_memory(reader_idx)
 
-            if self.is_fidesmo:
-                # Fidesmo path - skip GP authentication entirely
-                self.key = None  # Clear any GP key — Fidesmo doesn't use one
-                self.fidesmo_mode_signal.emit(True)
-            else:
+            if not self.is_fidesmo:
                 # Standard GP path - existing logic
                 self.retrieve_cplc_and_update_identifier()
 

@@ -228,23 +228,23 @@ class FDSMService:
         """
         Parse fdsm --card-apps output.
 
-        Expected format (best-effort, will be refined with real output):
-        Lines containing AID strings, possibly with version info.
+        Actual format (same as --store-apps):
+            #  appId - name and vendor
+            cc68e88c - FIDO Security (by VivoKey Technologies)
+                       Services: install, destroy
+
+        Returns:
+            Dict mapping app_id (uppercase) to name string
         """
         apps: Dict[str, Optional[str]] = {}
         for line in output.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("["):
+            if line.startswith("#") or line.startswith("Using card") or not line.strip():
                 continue
-            # Try to extract AID from line
-            # Common formats: "AID: A0000001234..." or just hex AIDs
-            parts = line.split()
-            for part in parts:
-                # Look for hex strings that could be AIDs (at least 10 hex chars)
-                clean = part.replace(":", "").replace(" ", "").upper()
-                if len(clean) >= 10 and all(c in "0123456789ABCDEF" for c in clean):
-                    apps[clean] = None
-                    break
+            # App lines start with hex app_id (no leading whitespace)
+            if not line[0].isspace():
+                match = re.match(r'^([0-9a-fA-F]+)\s*-\s*(.+)$', line.strip())
+                if match:
+                    apps[match.group(1).upper()] = match.group(2).strip()
         return apps
 
     def install_applet(

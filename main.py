@@ -43,7 +43,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QSizePolicy,
 )
-from PyQt5.QtCore import QTimer, Qt, QSize, QEvent
+from PyQt5.QtCore import QTimer, Qt, QSize, QEvent, pyqtSignal
 import sip
 from cryptography.exceptions import InvalidTag
 
@@ -406,6 +406,10 @@ if os.name == "nt":
 
 
 class GPManagerApp(QMainWindow):
+    # Signals for cross-thread Fidesmo fetch callbacks
+    _fidesmo_fetch_done = pyqtSignal(object)
+    _fidesmo_fetch_error = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.nfc_thread = None
@@ -536,8 +540,16 @@ class GPManagerApp(QMainWindow):
         grid_layout = QGridLayout()
         grid_layout.addWidget(QLabel("Installed Apps"), 0, 0)
         grid_layout.addWidget(self.installed_list, 1, 0)
+        # Available apps header: label on left, inline spinner on right
+        available_header = QWidget()
+        available_header_layout = QHBoxLayout(available_header)
+        available_header_layout.setContentsMargins(0, 0, 0, 0)
         self.available_label = QLabel("Available Apps")
-        grid_layout.addWidget(self.available_label, 0, 1)
+        available_header_layout.addWidget(self.available_label)
+        available_header_layout.addStretch()
+        self._available_spinner = LoadingIndicator(available_header, interval=80, compact=True)
+        available_header_layout.addWidget(self._available_spinner)
+        grid_layout.addWidget(available_header, 0, 1)
         grid_layout.addWidget(self.available_list, 1, 1)
 
         # No static buttons - contextual buttons appear in details pane
@@ -740,6 +752,7 @@ class GPManagerApp(QMainWindow):
         self.nfc_thread.key_setter_signal.connect(self.nfc_thread.key_setter)
         self.nfc_thread.cplc_retrieved_signal.connect(self.on_cplc_retrieved)
         self.nfc_thread.fidesmo_mode_signal.connect(self._on_fidesmo_mode_changed)
+        self.nfc_thread.fidesmo_confirm_signal.connect(self._on_fidesmo_confirm)
 
         # Loading dialog for card operations
         self._loading_dialog = LoadingDialog(parent=self)
@@ -1096,9 +1109,12 @@ class GPManagerApp(QMainWindow):
     def handle_tag_menu(self):
         # Actions requiring a tag present (card connected and authenticated with key)
         tag_present = bool(self.nfc_thread.key and self.secure_storage)
+        # Fidesmo mode: card connected but uses FDSM auth (no GP key)
+        fidesmo_present = bool(self._fidesmo_mode and self.secure_storage)
 
         if hasattr(self, '_set_tag_name_action'):
-            self._set_tag_name_action.setEnabled(tag_present)
+            # Naming works for both GP and Fidesmo cards
+            self._set_tag_name_action.setEnabled(tag_present or fidesmo_present)
         if hasattr(self, '_set_tag_key_action'):
             self._set_tag_key_action.setEnabled(tag_present)
         if hasattr(self, '_change_tag_key_action'):
@@ -1706,6 +1722,8 @@ class GPManagerApp(QMainWindow):
         if self._fidesmo_mode:
             self._populate_fidesmo_available_list()
             return
+        self._update_available_label("Available Apps")
+        self._fidesmo_store_apps = []
         # Block signals during list manipulation to prevent spurious selection events
         self.available_list.blockSignals(True)
         self.available_list.clear()
@@ -2148,6 +2166,16 @@ class GPManagerApp(QMainWindow):
             self.message_queue.add_message(f"No CAP info available for {display_text}.")
             return
 
+        # Fidesmo apps: uninstall by Fidesmo app ID (not a .cap file)
+        if self._fidesmo_mode and cap_name and not cap_name.endswith(".cap"):
+            display_name = self.app_display_names.get(cap_name, display_text)
+            self.message_queue.add_message(f"Uninstalling Fidesmo app: {display_name}")
+            self._loading_dialog.show_loading(
+                timeout=60,
+                on_timeout=self._on_loading_timeout
+            )
+            return self.nfc_thread.uninstall_app(cap_name, force=True)
+
         # Look up available info for the selected cap.
         if cap_name not in self.available_apps_info:
             self.message_queue.add_message(f"No available info for {cap_name}.")
@@ -2274,6 +2302,15 @@ class GPManagerApp(QMainWindow):
             elif matched_plugin_name:
                 display_text = f"Unknown from {matched_plugin_name}: {raw_aid}"
                 matched_cap = None  # Ensure no cap stored for unknown apps
+            elif version and not version[0].isdigit():
+                # FDSM returns the app name in the version field (e.g.,
+                # "FIDO Security (by VivoKey Technologies)")
+                display_text = version
+                version = None  # Already used as display name
+                matched_cap = None
+                # Store display name and generate description for Fidesmo apps
+                self.app_display_names[raw_aid] = display_text
+                self._generate_fidesmo_description(raw_aid, display_text)
             else:
                 display_text = f"Unknown: {raw_aid}"
                 matched_cap = None
@@ -2285,6 +2322,9 @@ class GPManagerApp(QMainWindow):
             item = QListWidgetItem(display_text)
             if matched_cap:
                 item.setData(Qt.UserRole, matched_cap)  # Store cap_name for lookups
+            else:
+                # Store Fidesmo app ID for details pane lookup
+                item.setData(Qt.UserRole, raw_aid)
             self.installed_list.addItem(item)
         self.installed_list.blockSignals(False)
         self.populate_available_list()
@@ -2583,9 +2623,56 @@ class GPManagerApp(QMainWindow):
         else:
             self._fdsm_available = True
 
+    def _on_fidesmo_confirm(self):
+        """Handle Fidesmo auto-detection — ask user before entering Fidesmo mode."""
+        uid = self.nfc_thread.current_uid
+
+        # Check if card is already stored as Fidesmo — skip dialog
+        if self.secure_storage and self.secure_storage.get("tags", {}).get(uid):
+            stored_key = self.secure_storage["tags"][uid].get("key")
+            if stored_key == FIDESMO_KEY_SENTINEL:
+                self.nfc_thread.key_setter_signal.emit(FIDESMO_KEY_SENTINEL)
+                return
+
+        # Show confirmation dialog
+        result = QMessageBox.question(
+            self,
+            "Potential Apex Detected",
+            "This card's memory profile matches a VivoKey Apex.\n\n"
+            "Would you like to use Fidesmo mode?\n"
+            "(This uses FDSM instead of GlobalPlatform Pro)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+
+        if result == QMessageBox.Yes:
+            # Store the sentinel so we recognize this card next time
+            if self.secure_storage is not None and uid:
+                if "tags" not in self.secure_storage:
+                    self.secure_storage["tags"] = {}
+                if uid in self.secure_storage["tags"]:
+                    self.secure_storage["tags"][uid]["key"] = FIDESMO_KEY_SENTINEL
+                else:
+                    self.secure_storage["tags"][uid] = {"name": uid, "key": FIDESMO_KEY_SENTINEL}
+                self.secure_storage_instance.save()
+
+            # Show loading dialog and enter Fidesmo mode
+            if not self._loading_dialog.is_loading():
+                self._last_operation = "detection"
+                self._pending_install_cap = None
+                self._loading_dialog.show_loading(
+                    timeout=10,
+                    on_timeout=self._on_loading_timeout,
+                )
+            self.nfc_thread.key_setter_signal.emit(FIDESMO_KEY_SENTINEL)
+        else:
+            # User declined — proceed with normal GP key flow
+            self.get_key(uid)
+
     def _on_fidesmo_mode_changed(self, is_fidesmo: bool):
         """Handle transition to/from Fidesmo mode."""
         self._fidesmo_mode = is_fidesmo
+        self.handle_tag_menu()  # Update tag menu (enables Set Name for Fidesmo)
         if is_fidesmo:
             if not self._fdsm_available:
                 from src.services.fdsm_service import FDSM_MIN_JAVA_VERSION
@@ -2600,10 +2687,26 @@ class GPManagerApp(QMainWindow):
             self.message_queue.add_message("Fidesmo device detected. Using FDSM for operations.")
             self._fetch_fidesmo_store_apps()
         else:
-            self._fidesmo_store_apps = []
-            self.populate_available_list()
-            # Restore "Available Apps" label if it was changed
-            self._update_available_label("Available Apps")
+            # Card removed — stop any in-progress fetch but keep the
+            # available list as-is.  It will be repopulated naturally
+            # when a new card is detected (via on_installed_apps_updated
+            # → populate_available_list for GP, or _fetch_fidesmo_store_apps
+            # for Fidesmo).
+            self._available_spinner.stop()
+
+    def _has_fidesmo_auth(self) -> bool:
+        """Check if Fidesmo auth token is configured."""
+        return bool(
+            self.secure_storage
+            and self.secure_storage.get("fidesmo")
+            and self.secure_storage["fidesmo"].get("auth_token")
+        )
+
+    def _get_fidesmo_label(self) -> str:
+        """Get the appropriate label for the available apps column in Fidesmo mode."""
+        if self._has_fidesmo_auth():
+            return "Fidesmo Apps+"
+        return "Fidesmo Apps"
 
     def _fetch_fidesmo_store_apps(self):
         """Fetch available apps from the Fidesmo store in a background thread."""
@@ -2611,7 +2714,9 @@ class GPManagerApp(QMainWindow):
         if self.secure_storage and self.secure_storage.get("fidesmo"):
             auth_token = self.secure_storage["fidesmo"].get("auth_token")
 
-        self.loading_indicator.start("Fetching Fidesmo store apps...")
+        # Update label and show inline spinner
+        self._update_available_label(self._get_fidesmo_label())
+        self._available_spinner.start("Fetching...")
 
         # Timeout after 15 seconds
         if not hasattr(self, '_fidesmo_fetch_timer'):
@@ -2629,13 +2734,13 @@ class GPManagerApp(QMainWindow):
 
         def _on_complete(apps):
             self._fidesmo_fetch_timer.stop()
-            self.loading_indicator.stop()
+            self._available_spinner.stop()
             self._fidesmo_store_apps = apps if apps else []
             self._populate_fidesmo_available_list()
 
         def _on_error(error_msg):
             self._fidesmo_fetch_timer.stop()
-            self.loading_indicator.stop()
+            self._available_spinner.stop()
             self._fidesmo_store_apps = []
             self.message_queue.add_message(f"Could not fetch Fidesmo store: {error_msg}")
             self._populate_fidesmo_available_list()
@@ -2645,7 +2750,7 @@ class GPManagerApp(QMainWindow):
 
     def _on_fidesmo_fetch_timeout(self):
         """Handle timeout when fetching Fidesmo store apps."""
-        self.loading_indicator.stop()
+        self._available_spinner.stop()
         self._fidesmo_store_apps = []
         self.message_queue.add_message("Fidesmo store fetch timed out. Check Java and fdsm.jar.")
         self._populate_fidesmo_available_list()
@@ -2654,22 +2759,77 @@ class GPManagerApp(QMainWindow):
         """Run a Fidesmo fetch operation in a background thread."""
         import threading
 
+        # Connect signals (disconnect first to avoid duplicate connections)
+        try:
+            self._fidesmo_fetch_done.disconnect()
+        except TypeError:
+            pass
+        try:
+            self._fidesmo_fetch_error.disconnect()
+        except TypeError:
+            pass
+        self._fidesmo_fetch_done.connect(on_complete)
+        self._fidesmo_fetch_error.connect(on_error)
+
         def _worker():
             try:
                 result = fetch_fn()
-                # Schedule callback on main thread
-                QTimer.singleShot(0, lambda: on_complete(result))
+                self._fidesmo_fetch_done.emit(result)
             except Exception as e:
-                QTimer.singleShot(0, lambda: on_error(str(e)))
+                self._fidesmo_fetch_error.emit(str(e))
 
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
+    @staticmethod
+    def _extract_fidesmo_base_name(name: str) -> str:
+        """Extract base name from Fidesmo app name, stripping vendor info.
+
+        'SmartPGP (by VivoKey Technologies)' -> 'smartpgp'
+        'PGP (by Fidesmo AB)' -> 'pgp'
+        """
+        if " (by " in name:
+            name = name.split(" (by ")[0]
+        return name.strip().lower()
+
     def _populate_fidesmo_available_list(self):
-        """Populate the available list with Fidesmo store apps."""
-        self._update_available_label("Fidesmo Store")
+        """Populate the available list with Fidesmo store apps (+ GP plugins if auth configured)."""
+        has_auth = self._has_fidesmo_auth()
+        self._update_available_label(self._get_fidesmo_label())
         self.available_list.clear()
+
+        # Build set of installed app IDs (uppercase) for filtering
+        installed_ids = {aid.upper() for aid in self.installed_aids.keys()}
+
+        # Build set of installed base names for name-based cross-vendor filtering
+        installed_base_names = set()
+        for aid, name in self.installed_aids.items():
+            if name and isinstance(name, str):
+                installed_base_names.add(self._extract_fidesmo_base_name(name))
+
         for app in self._fidesmo_store_apps:
+            # Skip apps already installed (exact ID match or prefix match)
+            app_id_upper = app.app_id.upper()
+            if app_id_upper in installed_ids:
+                continue
+            if any(
+                inst.startswith(app_id_upper) or app_id_upper.startswith(inst)
+                for inst in installed_ids
+            ):
+                continue
+
+            # Skip apps that match an installed app by name (cross-vendor filtering)
+            # e.g., "PGP (by Fidesmo AB)" filtered when "SmartPGP (by VivoKey)" installed
+            store_base = self._extract_fidesmo_base_name(app.name)
+            if any(
+                store_base in inst_name or inst_name in store_base
+                for inst_name in installed_base_names
+            ):
+                continue
+
+            # Generate description for available Fidesmo store apps
+            self._generate_fidesmo_description(app.app_id, app.name, app.description)
+
             item_text = app.name
             if app.version:
                 item_text += f" (v{app.version})"
@@ -2677,6 +2837,69 @@ class GPManagerApp(QMainWindow):
             item.setData(Qt.UserRole, app.app_id)
             item.setData(Qt.UserRole + 1, "fidesmo_store")
             self.available_list.addItem(item)
+
+        # When user has Fidesmo auth configured, also show GP plugins
+        # (FDSM can install arbitrary CAP files on Fidesmo devices with auth)
+        if has_auth:
+            disabled_plugins = self._get_disabled_plugins()
+            for cap_name, (plugin_name, url) in self.available_apps_info.items():
+                if plugin_name in disabled_plugins:
+                    alternative_found = False
+                    if cap_name in self.cap_providers:
+                        for alt_plugin, alt_url in self.cap_providers[cap_name]:
+                            if alt_plugin not in disabled_plugins:
+                                plugin_name = alt_plugin
+                                alternative_found = True
+                                break
+                    if not alternative_found:
+                        continue
+                if cap_name in unsupported_apps:
+                    continue
+                if cap_name in self.installed_app_names:
+                    continue
+                if self._is_aid_installed(cap_name, plugin_name):
+                    continue
+                display_name = self.app_display_names.get(cap_name, cap_name)
+                item = QListWidgetItem(display_name)
+                item.setData(Qt.UserRole, cap_name)
+                self.available_list.addItem(item)
+
+    def _generate_fidesmo_description(self, app_id: str, full_name: str, services: str = None):
+        """Generate a markdown description for a Fidesmo app and store it.
+
+        Args:
+            app_id: Fidesmo app ID (e.g., 'CC68E88C')
+            full_name: Full name with vendor (e.g., 'SmartPGP (by VivoKey Technologies)')
+            services: Optional services string from Fidesmo store
+        """
+        # Extract name and vendor
+        if " (by " in full_name:
+            name, vendor = full_name.rsplit(" (by ", 1)
+            vendor = vendor.rstrip(")")
+        else:
+            name = full_name
+            vendor = None
+
+        # Build markdown description
+        lines = []
+        if vendor:
+            lines.append(f"**Vendor:** {vendor}")
+        lines.append(f"**Fidesmo App ID:** `{app_id}`")
+        if services:
+            lines.append(f"\n**Services:** {services}")
+
+        # Also check store data for extra info (e.g., services for installed apps)
+        if not services:
+            for store_app in self._fidesmo_store_apps:
+                if store_app.app_id.upper() == app_id.upper():
+                    if store_app.description:
+                        lines.append(f"\n**Services:** {store_app.description}")
+                    break
+
+        self.app_descriptions[app_id] = "\n".join(lines)
+        # Also store display name mapping
+        if app_id not in self.app_display_names:
+            self.app_display_names[app_id] = name
 
     def _update_available_label(self, text: str):
         """Update the 'Available Apps' column header label."""
