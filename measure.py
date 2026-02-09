@@ -14,6 +14,7 @@ def get_memory(reader=0, retry=0):
     # Filter out SAM readers - we only want PICC (contactless card) readers
     reader_list = [r for r in all_readers if "SAM" not in str(r).upper()]
     if len(reader_list) > 0:
+        connection = None
         try:
             connection = reader_list[reader].createConnection()
             connection.connect()
@@ -41,6 +42,11 @@ def get_memory(reader=0, retry=0):
                 ]
             )
         except (CardConnectionException, NoCardException) as e:
+            if connection:
+                try:
+                    connection.disconnect()
+                except Exception:
+                    pass
             if retry > 10:
                 print(e)
                 return None

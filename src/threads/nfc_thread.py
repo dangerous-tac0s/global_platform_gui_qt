@@ -123,6 +123,7 @@ class NFCHandlerThread(QThread):
         self.current_uid: Optional[str] = None
         self.current_identifier: Optional[CardIdentifier] = None
         self.key: Optional[str] = None
+        self._key_config = None  # Optional KeyConfiguration for separate ENC/MAC/DEK keys
         self.card_detected: bool = False
         self.valid_card_detected: bool = False
         self._pending_key: Optional[str] = None  # Key waiting to be processed async
@@ -281,6 +282,7 @@ class NFCHandlerThread(QThread):
                         self.current_uid = None
                         self.current_identifier = None
                         self.key = None
+                        self._key_config = None
                         self._pending_key = None  # Clear any pending key operation
                         self.card_detected = False
                         self.valid_card_detected = False
@@ -487,7 +489,9 @@ class NFCHandlerThread(QThread):
             else:
                 gp = GPService()
 
-            cplc_data = gp.get_cplc_data(self.selected_reader_name, self.key)
+            cplc_data = gp.get_cplc_data(
+                self.selected_reader_name, self.key, key_config=self._key_config
+            )
 
             if cplc_data:
                 cplc_hash = cplc_data.compute_hash()
@@ -774,27 +778,32 @@ class NFCHandlerThread(QThread):
             "SCARD_E_NOT_TRANSACTED",
             "SCARD_W_RESET_CARD",
             "SCARD_E_COMM_DATA_LOST",
+            "SCARD_E_NO_SMARTCARD",
+        ]
+
+        cmd = [
+            *self.gp[os.name],
+            "--key-enc", enc_key,
+            "--key-mac", mac_key,
+            "--key-dek", dek_key,
+            "-r", self.selected_reader_name,
+            *command,
         ]
 
         last_stderr = ""
         for attempt in range(max_retries + 1):
-            result = subprocess.run(
-                [
-                    *self.gp[os.name],
-                    "--key-enc", enc_key,
-                    "--key-mac", mac_key,
-                    "--key-dek", dek_key,
-                    "-r", self.selected_reader_name,
-                    *command,
-                ],
-                capture_output=True,
-            )
+            result = subprocess.run(cmd, capture_output=True)
 
             stdout = result.stdout.decode()
             stderr = result.stderr.decode()
             last_stderr = stderr
 
-            if result.returncode == 0:
+            # Check for useful output even if returncode is non-zero
+            # (GP often returns non-zero with WARN messages but valid data)
+            has_useful_output = stdout and (
+                "PKG:" in stdout or "APP:" in stdout or "ISD:" in stdout
+            )
+            if result.returncode == 0 or has_useful_output:
                 return stdout
 
             # Check if this is a transient error that can be retried
@@ -815,6 +824,9 @@ class NFCHandlerThread(QThread):
     def run_gp(self, command: List[str], error_preface: str = "Error:", max_retries: int = 2):
         """Run a GlobalPlatformPro command with retry logic for transient errors.
 
+        Automatically uses separate ENC/MAC/DEK keys when a SEPARATE
+        KeyConfiguration is active (SCP03), otherwise uses a single key.
+
         Args:
             command: The GP command arguments
             error_preface: Prefix for error messages
@@ -823,11 +835,25 @@ class NFCHandlerThread(QThread):
         if not self.key or self.is_fidesmo:
             return None  # Protect unknown tags and Fidesmo devices
 
+        # Route to separate-key path if key config is SEPARATE mode
+        if self._key_config and hasattr(self._key_config, 'mode'):
+            from ..models.key_config import KeyMode
+            if self._key_config.mode == KeyMode.SEPARATE:
+                return self._run_gp_with_separate_keys(
+                    command,
+                    enc_key=self._key_config.enc_key,
+                    mac_key=self._key_config.mac_key,
+                    dek_key=self._key_config.dek_key,
+                    error_preface=error_preface,
+                    max_retries=max_retries,
+                )
+
         # Transient errors that can be retried
         transient_errors = [
             "SCARD_E_NOT_TRANSACTED",
             "SCARD_W_RESET_CARD",
             "SCARD_E_COMM_DATA_LOST",
+            "SCARD_E_NO_SMARTCARD",
         ]
 
         last_stderr = ""
