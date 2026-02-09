@@ -147,6 +147,7 @@ class GPService:
         key: Optional[str] = None,
         reader: Optional[str] = None,
         timeout: int = 60,
+        key_config=None,
     ) -> GPResult:
         """
         Run a GP command with optional key and reader.
@@ -156,13 +157,19 @@ class GPService:
             key: Card master key (hex string)
             reader: Reader name
             timeout: Command timeout in seconds
+            key_config: Optional KeyConfiguration for separate ENC/MAC/DEK keys
 
         Returns:
             GPResult with command output
         """
         cmd = list(self._gp_cmd)
 
-        if key:
+        # Use separate keys if key_config is in SEPARATE mode
+        if key_config and hasattr(key_config, 'mode') and key_config.mode.value == "separate":
+            cmd.extend(["--key-enc", key_config.enc_key])
+            cmd.extend(["--key-mac", key_config.mac_key])
+            cmd.extend(["--key-dek", key_config.dek_key])
+        elif key:
             cmd.extend(["-k", key])
 
         if reader:
@@ -526,7 +533,7 @@ class GPService:
         """
         return self._run_command(["--info"], key=key, reader=reader)
 
-    def get_cplc_data(self, reader: str, key: str) -> Optional[CPLCData]:
+    def get_cplc_data(self, reader: str, key: str, key_config=None) -> Optional[CPLCData]:
         """
         Retrieve CPLC (Card Production Life Cycle) data from the card.
 
@@ -536,11 +543,12 @@ class GPService:
         Args:
             reader: Reader name
             key: Card master key
+            key_config: Optional KeyConfiguration for separate ENC/MAC/DEK keys
 
         Returns:
             CPLCData if available, None if CPLC retrieval fails
         """
-        result = self._run_command(["--info"], key=key, reader=reader)
+        result = self._run_command(["--info"], key=key, reader=reader, key_config=key_config)
         if not result.success:
             return None
 

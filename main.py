@@ -813,6 +813,7 @@ class GPManagerApp(QMainWindow):
         # Key prompt cancellation flag - when True, all PCSC operations are halted
         # This prevents sending wrong keys to cards which could brick them
         self._key_prompt_cancelled = False
+        self._key_prompt_active = False  # True while key entry dialog is open
 
         # Initially disable action buttons
         self._update_action_buttons_state(False)
@@ -1949,7 +1950,9 @@ class GPManagerApp(QMainWindow):
         if present:
             # Show loading dialog when card is first detected
             # Use 10s timeout - detection operations typically complete in seconds
-            if not self._loading_dialog.is_loading():
+            # Don't show while key entry dialog is open (its event loop would
+            # process this signal and start a timer that times out during typing)
+            if not self._loading_dialog.is_loading() and not self._key_prompt_active:
                 # Track as detection operation for selection behavior
                 self._last_operation = "detection"
                 self._pending_install_cap = None
@@ -2492,6 +2495,10 @@ class GPManagerApp(QMainWindow):
             if self.secure_storage is not None:
                 if self.secure_storage["tags"].get(card_id):
                     key = self.secure_storage["tags"][card_id]["key"]
+                    # Also load stored key_config for separate-key auth
+                    stored_config = self._get_key_config_for_card(card_id)
+                    if stored_config:
+                        self.nfc_thread._key_config = stored_config
             if key is None:
                 is_default_key = self.config["known_tags"].get(card_id, None)
                 if is_default_key:
@@ -2522,6 +2529,9 @@ class GPManagerApp(QMainWindow):
         """
         Prompts the user to enter their smart card's key.
 
+        Uses ChangeKeyDialog in "enter" mode, which supports both single
+        keys and separate ENC/MAC/DEK keys (SCP02/SCP03).
+
         Note: uid may be None or "__CONTACT_CARD__" for contact cards on
         initial detection. In that case, we just return the key - storage
         will happen after CPLC retrieval via on_cplc_retrieved().
@@ -2529,81 +2539,85 @@ class GPManagerApp(QMainWindow):
         # Hide loading dialog while key prompt is visible
         was_loading = self._loading_dialog.is_loading()
         self._loading_dialog.hide_loading()
+        self._key_prompt_active = True
 
         # Treat __CONTACT_CARD__ placeholder as no UID
         is_contact_placeholder = uid is None or uid == "__CONTACT_CARD__"
-        is_new = not is_contact_placeholder and self.config["known_tags"].get(uid, False) != False
-        title = ""
-        if is_contact_placeholder:
-            title = "Contact Card: "
-        elif is_new:
-            title = "New Tag: "
         if not existing_key:
             existing_key = DEFAULT_KEY
-        title += "Enter Hexadecimal Master Key"
-        dialog = HexInputDialog(
-            title=title,
-            fixed_byte_counts=[16, 24],
+
+        dialog = ChangeKeyDialog(
+            current_key=existing_key,
+            mode="enter",
             parent=self,
-            initial_value=existing_key,
         )
 
-        if dialog.exec_():  # Show dialog and wait for user action
-            res = dialog.get_results()
+        if dialog.exec_() != QDialog.Accepted:
+            self._key_prompt_active = False
+            return None
 
-            # Handle Fidesmo mode override
-            if res and res.upper() == "FIDESMO":
-                confirm = QMessageBox.question(
-                    self,
-                    "Enable Fidesmo Mode",
-                    "You are about to enable Fidesmo mode for this card.\n\n"
-                    "This will use FDSM instead of GlobalPlatform Pro\n"
-                    "for all card operations.\n\n"
-                    "Are you sure you want to continue?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
-                )
-                if confirm != QMessageBox.Yes:
-                    return None
+        self._key_prompt_active = False
 
-                # Store the sentinel in secure storage for auto-detection on reconnect
-                if not is_contact_placeholder and self.secure_storage is not None:
-                    if not self.secure_storage.get("tags"):
-                        self.secure_storage["tags"] = {}
-                    if not self.secure_storage["tags"].get(uid):
-                        self.secure_storage["tags"][uid] = {"name": uid, "key": FIDESMO_KEY_SENTINEL}
-                    else:
-                        self.secure_storage["tags"][uid]["key"] = FIDESMO_KEY_SENTINEL
+        # Handle Fidesmo mode override
+        if dialog.is_fidesmo:
+            confirm = QMessageBox.question(
+                self,
+                "Enable Fidesmo Mode",
+                "You are about to enable Fidesmo mode for this card.\n\n"
+                "This will use FDSM instead of GlobalPlatform Pro\n"
+                "for all card operations.\n\n"
+                "Are you sure you want to continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return None
 
-                if was_loading:
-                    self._loading_dialog.show_loading(
-                        timeout=10,
-                        on_timeout=self._on_loading_timeout
-                    )
-                return FIDESMO_KEY_SENTINEL
+            # Store the sentinel in secure storage for auto-detection on reconnect
+            if not is_contact_placeholder and self.secure_storage is not None:
+                if not self.secure_storage.get("tags"):
+                    self.secure_storage["tags"] = {}
+                if not self.secure_storage["tags"].get(uid):
+                    self.secure_storage["tags"][uid] = {"name": uid, "key": FIDESMO_KEY_SENTINEL}
+                else:
+                    self.secure_storage["tags"][uid]["key"] = FIDESMO_KEY_SENTINEL
 
-            # Only store immediately if we have a valid uid
-            # For contact cards (placeholder), storage happens after CPLC retrieval
-            if not is_contact_placeholder:
-                self.update_known_tags(uid, res)
-
-                if self.secure_storage is not None:
-                    if not self.secure_storage["tags"].get(uid):
-                        self.secure_storage["tags"][uid] = {"name": uid, "key": res}
-                    else:
-                        self.secure_storage["tags"][uid]["key"] = res
-
-            # Resume loading dialog after key entry
             if was_loading:
                 self._loading_dialog.show_loading(
                     timeout=10,
                     on_timeout=self._on_loading_timeout
                 )
+            return FIDESMO_KEY_SENTINEL
 
-            return res
-        else:
-            # User cancelled - don't resume loading dialog
+        # Get key configuration (supports single or separate keys)
+        config = dialog.get_configuration()
+        if not config:
             return None
+
+        effective_key = config.get_effective_key()
+
+        # Only store immediately if we have a valid uid
+        # For contact cards (placeholder), storage happens after CPLC retrieval
+        if not is_contact_placeholder:
+            self.update_known_tags(uid, effective_key)
+
+            if self.secure_storage is not None:
+                tag_data = self.secure_storage["tags"].get(uid, {"name": uid})
+                tag_data["key"] = effective_key
+                tag_data["key_config"] = config.to_dict()
+                self.secure_storage["tags"][uid] = tag_data
+
+        # Pass the key config to the NFC thread for separate-key auth
+        self.nfc_thread._key_config = config
+
+        # Resume loading dialog after key entry
+        if was_loading:
+            self._loading_dialog.show_loading(
+                timeout=10,
+                on_timeout=self._on_loading_timeout
+            )
+
+        return effective_key
 
     def update_title_bar(self, message: str):
         if not "None" in message and len(message) > 0:

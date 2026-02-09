@@ -19,13 +19,9 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QRadioButton,
     QButtonGroup,
-    QGroupBox,
-    QCheckBox,
-    QFrame,
     QDialogButtonBox,
     QToolButton,
     QWidget,
-    QSizePolicy,
 )
 
 from ...models.key_config import (
@@ -56,6 +52,10 @@ class HexLineEdit(QLineEdit):
     def _format_input(self):
         """Auto-format input as uppercase hex with spaces."""
         text = self.text()
+        # Don't hex-format if user is typing "FIDESMO" keyword
+        stripped = text.replace(" ", "").upper()
+        if stripped.startswith("FIDE") or stripped == "FIDESMO":
+            return
         hex_only = re.sub(r"[^0-9a-fA-F]", "", text)
         spaced = " ".join([hex_only[i : i + 2] for i in range(0, len(hex_only), 2)])
         self.blockSignals(True)
@@ -89,10 +89,11 @@ class ChangeKeyDialog(QDialog):
         current_key: str = DEFAULT_KEY,
         current_config: Optional[KeyConfiguration] = None,
         scp_info: Optional[dict] = None,
+        mode: str = "change",
         parent=None,
     ):
         """
-        Initialize the change key dialog.
+        Initialize the key dialog.
 
         Args:
             current_key: Current card key (hex string)
@@ -100,15 +101,21 @@ class ChangeKeyDialog(QDialog):
             scp_info: Optional dict with SCP detection results:
                 - scp_version: "02", "03", or None
                 - supports_scp03: bool
+            mode: "enter" for new tag key entry, "change" for changing existing key
             parent: Parent widget
         """
         super().__init__(parent)
-        self.setWindowTitle("Change Card Key")
+        self._mode = mode
+        if mode == "enter":
+            self.setWindowTitle("Enter Card Key")
+        else:
+            self.setWindowTitle("Change Card Key")
         self.setMinimumWidth(500)
 
         self._current_key = current_key
         self._current_config = current_config
         self._scp_info = scp_info
+        self._is_fidesmo = False  # Set when user enters "FIDESMO"
 
         self._setup_ui()
         self._connect_signals()
@@ -134,14 +141,16 @@ class ChangeKeyDialog(QDialog):
         self._advanced_section = self._create_advanced_section()
         layout.addWidget(self._advanced_section)
 
-        # Warning label
-        warning = QLabel(
+        # Warning label (hidden in "enter" mode)
+        self._warning_label = QLabel(
             "Warning: Changing keys is irreversible. "
             "Losing your keys means permanent loss of card access."
         )
-        warning.setWordWrap(True)
-        warning.setStyleSheet(f"color: {Colors.warning_text()}; font-style: italic;")
-        layout.addWidget(warning)
+        self._warning_label.setWordWrap(True)
+        self._warning_label.setStyleSheet(f"color: {Colors.warning_text()}; font-style: italic;")
+        if self._mode == "enter":
+            self._warning_label.hide()
+        layout.addWidget(self._warning_label)
 
         # Button box
         button_layout = QHBoxLayout()
@@ -149,6 +158,8 @@ class ChangeKeyDialog(QDialog):
         self._reset_button = QPushButton("Reset to Default")
         self._reset_button.setMinimumWidth(120)  # Ensure text is fully visible on Windows
         self._reset_button.clicked.connect(self._reset_to_default)
+        if self._mode == "enter":
+            self._reset_button.hide()
         button_layout.addWidget(self._reset_button)
 
         button_layout.addStretch()
@@ -202,7 +213,7 @@ class ChangeKeyDialog(QDialog):
         return widget
 
     def _create_advanced_section(self) -> QWidget:
-        """Create the collapsible advanced section for SCP03 keys."""
+        """Create the collapsible advanced section for separate keys."""
         container = QWidget()
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 10, 0, 0)
@@ -212,23 +223,15 @@ class ChangeKeyDialog(QDialog):
         self._advanced_toggle.setStyleSheet("QToolButton { border: none; }")
         self._advanced_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._advanced_toggle.setArrowType(Qt.RightArrow)
-        self._advanced_toggle.setText(" Advanced: Separate SCP03 Keys")
+        self._advanced_toggle.setText(" Use Separate Keys")
         self._advanced_toggle.setCheckable(True)
         self._advanced_toggle.toggled.connect(self._toggle_advanced)
         container_layout.addWidget(self._advanced_toggle)
 
-        # Advanced content
-        self._advanced_content = QGroupBox()
+        # Advanced content - key inputs shown directly when expanded
+        self._advanced_content = QWidget()
         self._advanced_content.hide()
-        content_layout = QVBoxLayout(self._advanced_content)
-
-        # Enable checkbox
-        self._use_separate_keys = QCheckBox("Use separate ENC/MAC/DEK keys")
-        content_layout.addWidget(self._use_separate_keys)
-
-        # Separate key inputs
-        self._separate_keys_widget = QWidget()
-        sep_layout = QFormLayout(self._separate_keys_widget)
+        sep_layout = QFormLayout(self._advanced_content)
         sep_layout.setContentsMargins(20, 10, 0, 0)
 
         self._enc_input = HexLineEdit()
@@ -239,14 +242,6 @@ class ChangeKeyDialog(QDialog):
         sep_layout.addRow("MAC Key:", self._mac_input)
         sep_layout.addRow("DEK Key:", self._dek_input)
 
-        # Use same key checkbox
-        self._use_same_key = QCheckBox("Use same key for all three")
-        self._use_same_key.setChecked(True)
-        sep_layout.addRow("", self._use_same_key)
-
-        content_layout.addWidget(self._separate_keys_widget)
-        self._separate_keys_widget.setEnabled(False)
-
         container_layout.addWidget(self._advanced_content)
 
         return container
@@ -255,9 +250,6 @@ class ChangeKeyDialog(QDialog):
         """Connect UI signals."""
         self._key_input.textChanged.connect(self._on_main_key_changed)
         self._type_group.buttonClicked.connect(self._update_key_type_display)
-        self._use_separate_keys.toggled.connect(self._on_separate_keys_toggled)
-        self._use_same_key.toggled.connect(self._on_use_same_key_toggled)
-        self._enc_input.textChanged.connect(self._sync_keys_if_needed)
 
     def _load_current_config(self):
         """Load existing configuration into the UI."""
@@ -265,21 +257,11 @@ class ChangeKeyDialog(QDialog):
             return
 
         if self._current_config.mode == KeyMode.SEPARATE:
-            # Load separate keys
+            # Expand the separate keys section and load values
             self._advanced_toggle.setChecked(True)
-            self._use_separate_keys.setChecked(True)
-
             self._enc_input.setText(self._current_config.enc_key or "")
             self._mac_input.setText(self._current_config.mac_key or "")
             self._dek_input.setText(self._current_config.dek_key or "")
-
-            # Check if all keys are the same
-            same = (
-                self._current_config.enc_key
-                == self._current_config.mac_key
-                == self._current_config.dek_key
-            )
-            self._use_same_key.setChecked(same)
 
         # Set AES preference based on config
         if self._current_config.uses_aes():
@@ -335,39 +317,6 @@ class ChangeKeyDialog(QDialog):
         """Handle main key input change."""
         self._update_key_type_display()
 
-    def _on_separate_keys_toggled(self, checked: bool):
-        """Handle separate keys checkbox toggle."""
-        self._separate_keys_widget.setEnabled(checked)
-
-        if checked and self._use_same_key.isChecked():
-            # Copy main key to all three fields
-            key = self._key_input.text()
-            self._enc_input.setText(key)
-            self._mac_input.setText(key)
-            self._dek_input.setText(key)
-
-    def _on_use_same_key_toggled(self, checked: bool):
-        """Handle 'use same key' checkbox toggle."""
-        self._mac_input.setEnabled(not checked)
-        self._dek_input.setEnabled(not checked)
-
-        if checked:
-            # Sync all keys to ENC key
-            enc_key = self._enc_input.text()
-            self._mac_input.setText(enc_key)
-            self._dek_input.setText(enc_key)
-
-    def _sync_keys_if_needed(self):
-        """Sync MAC/DEK to ENC if 'use same key' is checked."""
-        if self._use_same_key.isChecked():
-            enc_key = self._enc_input.text()
-            self._mac_input.blockSignals(True)
-            self._dek_input.blockSignals(True)
-            self._mac_input.setText(enc_key)
-            self._dek_input.setText(enc_key)
-            self._mac_input.blockSignals(False)
-            self._dek_input.blockSignals(False)
-
     def _update_key_type_display(self):
         """Update the key type display based on current input."""
         byte_count = self._key_input.get_byte_count()
@@ -419,18 +368,16 @@ class ChangeKeyDialog(QDialog):
 
     def _validate_and_accept(self):
         """Validate input and accept dialog if valid."""
-        # Check main key
-        byte_count = self._key_input.get_byte_count()
-        if byte_count not in VALID_KEY_LENGTHS:
-            self._type_label.setText(
-                f"Invalid key length: {byte_count} bytes. "
-                f"Must be {', '.join(str(l) for l in VALID_KEY_LENGTHS)}."
-            )
-            self._type_label.setStyleSheet("color: red;")
-            return
+        # Check for FIDESMO keyword (enter mode only)
+        if self._mode == "enter":
+            raw = self._key_input.text().replace(" ", "").upper()
+            if raw == "FIDESMO":
+                self._is_fidesmo = True
+                self.accept()
+                return
 
-        # Check separate keys if enabled
-        if self._use_separate_keys.isChecked():
+        if self._advanced_toggle.isChecked():
+            # Separate keys mode — validate only ENC/MAC/DEK
             enc_len = self._enc_input.get_byte_count()
             mac_len = self._mac_input.get_byte_count()
             dek_len = self._dek_input.get_byte_count()
@@ -444,13 +391,23 @@ class ChangeKeyDialog(QDialog):
                 self._type_label.setText("All three keys must have the same length.")
                 self._type_label.setStyleSheet("color: red;")
                 return
+        else:
+            # Single key mode — validate main key
+            byte_count = self._key_input.get_byte_count()
+            if byte_count not in VALID_KEY_LENGTHS:
+                self._type_label.setText(
+                    f"Invalid key length: {byte_count} bytes. "
+                    f"Must be {', '.join(str(l) for l in VALID_KEY_LENGTHS)}."
+                )
+                self._type_label.setStyleSheet("color: red;")
+                return
 
         self.accept()
 
     def _reset_to_default(self):
         """Reset to default key."""
         self._key_input.setText(DEFAULT_KEY)
-        self._use_separate_keys.setChecked(False)
+        self._advanced_toggle.setChecked(False)
         self._des_radio.setChecked(True)
 
     def get_configuration(self) -> Optional[KeyConfiguration]:
@@ -463,11 +420,12 @@ class ChangeKeyDialog(QDialog):
         if self.result() != QDialog.Accepted:
             return None
 
-        key_type = self._get_selected_key_type()
-        if not key_type:
-            return None
-
-        if self._use_separate_keys.isChecked():
+        if self._advanced_toggle.isChecked():
+            # Separate keys — derive key type from ENC key
+            prefer_aes = self._aes_radio.isChecked()
+            key_type = detect_key_type(self._enc_input.get_clean_hex(), prefer_aes)
+            if not key_type:
+                return None
             return KeyConfiguration(
                 mode=KeyMode.SEPARATE,
                 key_type=key_type,
@@ -476,18 +434,29 @@ class ChangeKeyDialog(QDialog):
                 dek_key=self._dek_input.get_clean_hex(),
             )
         else:
+            key_type = self._get_selected_key_type()
+            if not key_type:
+                return None
             return KeyConfiguration(
                 mode=KeyMode.SINGLE,
                 key_type=key_type,
                 static_key=self._key_input.get_clean_hex(),
             )
 
+    @property
+    def is_fidesmo(self) -> bool:
+        """Check if user entered the FIDESMO keyword."""
+        return self._is_fidesmo
+
     def get_results(self) -> Optional[str]:
         """
         Get the key as a simple string (for backward compatibility).
 
         Returns:
-            Hex key string if accepted, None otherwise
+            "FIDESMO" if user entered the keyword,
+            hex key string if accepted, None otherwise
         """
+        if self._is_fidesmo:
+            return "FIDESMO"
         config = self.get_configuration()
         return config.get_effective_key() if config else None
