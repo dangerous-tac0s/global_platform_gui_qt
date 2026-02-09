@@ -34,6 +34,10 @@ def _ensure_tools_on_path():
         _add("/opt/homebrew/bin")
         _add("/usr/local/bin")
 
+        # Homebrew-installed OpenJDK (may not be symlinked to bin/)
+        _add("/opt/homebrew/opt/openjdk/bin")
+        _add("/usr/local/opt/openjdk/bin")
+
         # JDK installed via .pkg (Oracle, Adoptium, etc.)
         try:
             java_home = subprocess.run(
