@@ -16,6 +16,23 @@ class CardConnectionState(Enum):
     ERROR = "error"
 
 
+class CardType(Enum):
+    """Identifies the card platform for service routing."""
+    STANDARD_GP = "standard_gp"    # Normal GlobalPlatform card (uses gp.jar)
+    FIDESMO = "fidesmo"            # Fidesmo device (uses fdsm.jar)
+    UNKNOWN = "unknown"            # Not yet determined
+
+
+# Fidesmo detection constants
+FIDESMO_PERSISTENT_TOTAL = 84336  # VivoKey Apex persistent_total from JavaCard memory applet
+FIDESMO_KEY_SENTINEL = "FIDESMO"
+FIDESMO_DETECTION_AIDS = [
+    "A000000617020002000001",    # Fidesmo App AID
+    "A000000617020002000002",    # Fidesmo Batch AID
+    "A00000061702000900010101",  # Fidesmo Platform AID
+]
+
+
 @dataclass
 class CardIdentifier:
     """
@@ -78,6 +95,7 @@ class CardInfo:
     is_jcop: bool = False
     jcop_version: Optional[tuple] = None  # (major, minor, patch)
     atr: Optional[str] = None
+    card_type: CardType = CardType.UNKNOWN
 
     def __post_init__(self):
         # Handle legacy construction with just a UID string
@@ -148,6 +166,7 @@ class CardState:
     installed_applets: Dict[str, Optional[str]] = field(default_factory=dict)  # AID -> version
     key: Optional[str] = None
     uses_default_key: Optional[bool] = None
+    card_type: CardType = CardType.UNKNOWN
 
     @property
     def is_connected(self) -> bool:

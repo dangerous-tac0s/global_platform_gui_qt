@@ -18,14 +18,17 @@ if IS_WINDOWS:
     platform_datas = [
         ('gp.exe', '.'),
         ('gp.jar', '.'),
+        ('fdsm.jar', '.'),
     ]
 elif IS_MACOS or IS_LINUX:
     platform_datas = [
         ('gp.jar', '.'),
+        ('fdsm.jar', '.'),
     ]
 else:
     platform_datas = [
         ('gp.jar', '.'),
+        ('fdsm.jar', '.'),
     ]
 
 # Collect all src modules
@@ -46,6 +49,7 @@ src_imports = [
     'src.services',
     'src.services.gp_service',
     'src.services.storage_service',
+    'src.services.fdsm_service',
     'src.threads',
     'src.threads.nfc_thread',
     'src.threads.file_thread',

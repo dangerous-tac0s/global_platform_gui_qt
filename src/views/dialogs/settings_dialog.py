@@ -1283,6 +1283,208 @@ class PluginsTab(QWidget):
                 QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
 
 
+class FidesmoTab(QWidget):
+    """Tab for managing Fidesmo API credentials."""
+
+    settings_changed = pyqtSignal()
+
+    def __init__(
+        self,
+        secure_storage: Optional[Any] = None,
+        config: Optional[Dict[str, Any]] = None,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self._secure_storage = secure_storage
+        self._config = config or {}
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Status section
+        status_group = QGroupBox("Status")
+        status_layout = QVBoxLayout(status_group)
+
+        self._status_label = QLabel()
+        self._update_status_label()
+        status_layout.addWidget(self._status_label)
+
+        layout.addWidget(status_group)
+
+        # Authentication section
+        auth_group = QGroupBox("Authentication")
+        auth_layout = QVBoxLayout(auth_group)
+
+        auth_desc = QLabel(
+            "Enter your Fidesmo API token to enable applet installation and management."
+        )
+        auth_desc.setStyleSheet(f"color: {Colors.muted_text()};")
+        auth_desc.setWordWrap(True)
+        auth_layout.addWidget(auth_desc)
+
+        # Token input row
+        token_input_layout = QHBoxLayout()
+        self._token_edit = QLineEdit()
+        self._token_edit.setPlaceholderText("Enter API token...")
+        self._token_edit.setEchoMode(QLineEdit.Password)
+        self._token_edit.textChanged.connect(self._on_token_text_changed)
+        token_input_layout.addWidget(self._token_edit)
+
+        self._token_toggle_btn = QPushButton("Show")
+        self._token_toggle_btn.setFixedWidth(60)
+        self._token_toggle_btn.clicked.connect(self._toggle_token_visibility)
+        token_input_layout.addWidget(self._token_toggle_btn)
+
+        auth_layout.addLayout(token_input_layout)
+
+        # Token buttons
+        token_btn_layout = QHBoxLayout()
+        self._token_save_btn = QPushButton("Save")
+        self._token_save_btn.setEnabled(False)
+        self._token_save_btn.clicked.connect(self._on_save_token)
+        token_btn_layout.addWidget(self._token_save_btn)
+
+        self._token_clear_btn = QPushButton("Clear")
+        self._token_clear_btn.setEnabled(self._has_stored_token())
+        self._token_clear_btn.clicked.connect(self._on_clear_token)
+        token_btn_layout.addWidget(self._token_clear_btn)
+
+        token_btn_layout.addStretch()
+        auth_layout.addLayout(token_btn_layout)
+
+        layout.addWidget(auth_group)
+
+        # Application section
+        app_group = QGroupBox("Application")
+        app_layout = QVBoxLayout(app_group)
+
+        app_desc = QLabel(
+            "Fidesmo Application ID (optional, for developer use)."
+        )
+        app_desc.setStyleSheet(f"color: {Colors.muted_text()};")
+        app_desc.setWordWrap(True)
+        app_layout.addWidget(app_desc)
+
+        # App ID input
+        self._app_id_edit = QLineEdit()
+        self._app_id_edit.setPlaceholderText("Enter application ID...")
+        self._app_id_edit.textChanged.connect(self._on_app_id_text_changed)
+
+        # Load existing app ID
+        existing_app_id = self._config.get("fidesmo_app_id", "")
+        if existing_app_id:
+            self._app_id_edit.setText(existing_app_id)
+
+        app_layout.addWidget(self._app_id_edit)
+
+        # App ID buttons
+        app_btn_layout = QHBoxLayout()
+        self._app_id_save_btn = QPushButton("Save")
+        self._app_id_save_btn.setEnabled(False)
+        self._app_id_save_btn.clicked.connect(self._on_save_app_id)
+        app_btn_layout.addWidget(self._app_id_save_btn)
+
+        self._app_id_clear_btn = QPushButton("Clear")
+        self._app_id_clear_btn.setEnabled(bool(existing_app_id))
+        self._app_id_clear_btn.clicked.connect(self._on_clear_app_id)
+        app_btn_layout.addWidget(self._app_id_clear_btn)
+
+        app_btn_layout.addStretch()
+        app_layout.addLayout(app_btn_layout)
+
+        layout.addWidget(app_group)
+
+        layout.addStretch()
+
+    def _has_stored_token(self) -> bool:
+        """Check if a token is currently stored in secure storage."""
+        try:
+            if self._secure_storage and self._secure_storage.get("fidesmo"):
+                return bool(self._secure_storage["fidesmo"].get("auth_token"))
+        except Exception:
+            pass
+        return False
+
+    def _update_status_label(self):
+        """Update the status label based on current stored values."""
+        if self._has_stored_token():
+            self._status_label.setText("API Token: Configured")
+            self._status_label.setStyleSheet("color: #4CAF50;")
+        else:
+            self._status_label.setText("API Token: Not configured")
+            self._status_label.setStyleSheet("")
+
+    def _on_token_text_changed(self, text: str):
+        """Enable/disable save button based on input."""
+        self._token_save_btn.setEnabled(bool(text.strip()))
+
+    def _toggle_token_visibility(self):
+        """Toggle between showing and hiding the token."""
+        if self._token_edit.echoMode() == QLineEdit.Password:
+            self._token_edit.setEchoMode(QLineEdit.Normal)
+            self._token_toggle_btn.setText("Hide")
+        else:
+            self._token_edit.setEchoMode(QLineEdit.Password)
+            self._token_toggle_btn.setText("Show")
+
+    def _on_save_token(self):
+        """Save the API token to secure storage."""
+        token = self._token_edit.text().strip()
+        if not token:
+            return
+
+        try:
+            if self._secure_storage is not None:
+                if not self._secure_storage.get("fidesmo"):
+                    self._secure_storage["fidesmo"] = {}
+                self._secure_storage["fidesmo"]["auth_token"] = token
+                self._token_save_btn.setEnabled(False)
+                self._token_clear_btn.setEnabled(True)
+                self._update_status_label()
+                self.settings_changed.emit()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save token:\n{e}")
+
+    def _on_clear_token(self):
+        """Clear the stored API token."""
+        try:
+            if self._secure_storage is not None and self._secure_storage.get("fidesmo"):
+                del self._secure_storage["fidesmo"]["auth_token"]
+                if not self._secure_storage["fidesmo"]:
+                    del self._secure_storage["fidesmo"]
+                self._token_edit.clear()
+                self._token_save_btn.setEnabled(False)
+                self._token_clear_btn.setEnabled(False)
+                self._update_status_label()
+                self.settings_changed.emit()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to clear token:\n{e}")
+
+    def _on_app_id_text_changed(self, text: str):
+        """Enable/disable save button based on input."""
+        self._app_id_save_btn.setEnabled(bool(text.strip()))
+
+    def _on_save_app_id(self):
+        """Save the app ID to config."""
+        app_id = self._app_id_edit.text().strip()
+        if not app_id:
+            return
+
+        self._config["fidesmo_app_id"] = app_id
+        self._app_id_save_btn.setEnabled(False)
+        self._app_id_clear_btn.setEnabled(True)
+        self.settings_changed.emit()
+
+    def _on_clear_app_id(self):
+        """Clear the stored app ID."""
+        self._config["fidesmo_app_id"] = ""
+        self._app_id_edit.clear()
+        self._app_id_save_btn.setEnabled(False)
+        self._app_id_clear_btn.setEnabled(False)
+        self.settings_changed.emit()
+
+
 class SettingsDialog(QDialog):
     """
     Main settings dialog with tabbed interface.
@@ -1302,12 +1504,14 @@ class SettingsDialog(QDialog):
         plugin_map: Dict[str, Any],
         config: Dict[str, Any],
         storage_info: Optional[Dict[str, Any]] = None,
+        secure_storage: Optional[Any] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self._plugin_map = plugin_map
         self._config = config
         self._storage_info = storage_info or {}
+        self._secure_storage = secure_storage
         self._changes_made = False
 
         self.setWindowTitle("Settings")
@@ -1344,6 +1548,11 @@ class SettingsDialog(QDialog):
         self._plugins_tab.refresh_requested.connect(self._on_refresh_requested)
         self._plugins_tab.save_required.connect(self._save_settings)
         tabs.addTab(self._plugins_tab, "Plugins")
+
+        # Fidesmo tab
+        self._fidesmo_tab = FidesmoTab(self._secure_storage, self._config, self)
+        self._fidesmo_tab.settings_changed.connect(self._on_changes_made)
+        tabs.addTab(self._fidesmo_tab, "Fidesmo")
 
         layout.addWidget(tabs)
 

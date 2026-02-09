@@ -30,6 +30,7 @@ class LoadingIndicator(QWidget):
         self,
         parent: Optional[QWidget] = None,
         interval: int = 80,
+        compact: bool = False,
     ):
         """
         Initialize the loading indicator.
@@ -37,6 +38,7 @@ class LoadingIndicator(QWidget):
         Args:
             parent: Parent widget
             interval: Animation frame interval in milliseconds
+            compact: If True, omit trailing stretch (for inline/right-aligned use)
         """
         super().__init__(parent)
 
@@ -58,7 +60,8 @@ class LoadingIndicator(QWidget):
         self._message_label.setStyleSheet(f"color: {Colors.secondary_text()};")
         layout.addWidget(self._message_label)
 
-        layout.addStretch()
+        if not compact:
+            layout.addStretch()
 
         # Animation timer
         self._timer = QTimer(self)

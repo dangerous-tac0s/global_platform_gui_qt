@@ -24,6 +24,7 @@ from ..models.card import (
     CardState,
     CardConnectionState,
     CardMemory,
+    CardType,
 )
 from ..events.event_bus import (
     EventBus,
@@ -131,6 +132,7 @@ class CardController:
         uid: Optional[str] = None,
         is_jcop: bool = False,
         reader_name: Optional[str] = None,
+        card_type: CardType = CardType.UNKNOWN,
     ) -> None:
         """
         Called when a card is detected by the NFC thread.
@@ -139,6 +141,7 @@ class CardController:
             uid: Card UID (may be None for contact readers)
             is_jcop: Whether the card is JCOP compatible
             reader_name: Name of the reader that detected the card
+            card_type: Type of card detected (standard GP, Fidesmo, etc.)
         """
         self._current_reader = reader_name or self._current_reader
 
@@ -147,11 +150,13 @@ class CardController:
         info = CardInfo(
             identifier=identifier or CardIdentifier(),
             is_jcop=is_jcop,
+            card_type=card_type,
         ) if is_jcop else None
 
         self._state = CardState(
             connection_state=CardConnectionState.CONNECTED if is_jcop else CardConnectionState.DISCONNECTED,
             info=info,
+            card_type=card_type,
         )
 
         self._auth_state = AuthState.DETECTED if is_jcop else AuthState.IDLE
@@ -298,6 +303,7 @@ class CardController:
             installed_applets=self._state.installed_applets,
             key=key,
             uses_default_key=(key == DEFAULT_KEY),
+            card_type=self._state.card_type,
         )
 
         self._auth_state = AuthState.AUTHENTICATING
@@ -325,6 +331,7 @@ class CardController:
                 installed_applets=self._state.installed_applets,
                 key=self._state.key,
                 uses_default_key=self._state.uses_default_key,
+                card_type=self._state.card_type,
             )
 
             self._bus.emit(KeyValidatedEvent(
@@ -342,6 +349,7 @@ class CardController:
                 memory=self._state.memory,
                 key=None,  # Clear invalid key
                 uses_default_key=None,
+                card_type=self._state.card_type,
             )
 
             self._bus.emit(KeyValidatedEvent(
@@ -413,6 +421,7 @@ class CardController:
             installed_applets=self._state.installed_applets,
             key=self._state.key,
             uses_default_key=self._state.uses_default_key,
+            card_type=self._state.card_type,
         )
 
         # Migrate storage if needed
@@ -449,6 +458,7 @@ class CardController:
             installed_applets=self._state.installed_applets,
             key=self._state.key,
             uses_default_key=self._state.uses_default_key,
+            card_type=self._state.card_type,
         )
 
     def update_installed_applets(self, applets: dict) -> None:
@@ -460,6 +470,7 @@ class CardController:
             installed_applets=applets,
             key=self._state.key,
             uses_default_key=self._state.uses_default_key,
+            card_type=self._state.card_type,
         )
 
     # =========================================================================

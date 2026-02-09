@@ -9,7 +9,8 @@ from typing import Protocol, Optional, Dict, List, Tuple, Any, TYPE_CHECKING
 from ..models.config import ConfigData
 
 if TYPE_CHECKING:
-    from .gp_service import CPLCData
+    from .gp_service import CPLCData, GPResult
+    from .fdsm_service import FidesmoStoreApp
     from ..models.card import CardIdentifier
 
 
@@ -105,6 +106,130 @@ class IGPService(Protocol):
 
         Returns:
             CPLCData if available, None if retrieval fails
+        """
+        ...
+
+
+class IFDSMService(Protocol):
+    """Interface for Fidesmo CLI (fdsm.jar) operations."""
+
+    def list_applets(
+        self,
+        reader: str,
+        auth_token: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        """
+        List installed applets on the card via fdsm --card-apps.
+
+        Args:
+            reader: Reader name
+            auth_token: Optional Fidesmo auth token
+
+        Returns:
+            Dict mapping AID to version (or None if version unknown)
+        """
+        ...
+
+    def install_applet(
+        self,
+        reader: str,
+        cap_path: str,
+        auth_token: Optional[str] = None,
+        app_id: Optional[str] = None,
+        params: Optional[str] = None,
+        create_aid: Optional[str] = None,
+    ) -> "GPResult":
+        """
+        Install an applet on the card via fdsm --install.
+
+        Args:
+            reader: Reader name
+            cap_path: Path to CAP file
+            auth_token: Fidesmo API auth token
+            app_id: Fidesmo application ID
+            params: Optional install parameters (hex string)
+            create_aid: Optional AID to create
+
+        Returns:
+            GPResult with success status and output
+        """
+        ...
+
+    def uninstall_applet(
+        self,
+        reader: str,
+        target: str,
+        auth_token: Optional[str] = None,
+        app_id: Optional[str] = None,
+    ) -> "GPResult":
+        """
+        Uninstall an applet via fdsm --uninstall.
+
+        Args:
+            reader: Reader name
+            target: AID or CAP file path
+            auth_token: Fidesmo API auth token
+            app_id: Fidesmo application ID
+
+        Returns:
+            GPResult with success status and output
+        """
+        ...
+
+    def get_card_info(
+        self,
+        reader: str,
+        auth_token: Optional[str] = None,
+    ) -> "GPResult":
+        """
+        Get card info via fdsm --card-info.
+
+        Args:
+            reader: Reader name
+            auth_token: Optional auth token
+
+        Returns:
+            GPResult with card info in stdout
+        """
+        ...
+
+    def get_store_apps(
+        self,
+        auth_token: Optional[str] = None,
+        show_all: bool = False,
+    ) -> List["FidesmoStoreApp"]:
+        """
+        Query Fidesmo app store via fdsm --store-apps.
+
+        Does NOT require a card to be present.
+
+        Args:
+            auth_token: Optional auth token
+            show_all: If True, show all states (including unpublished)
+
+        Returns:
+            List of FidesmoStoreApp entries
+        """
+        ...
+
+    def run_service(
+        self,
+        reader: str,
+        service_id: str,
+        auth_token: Optional[str] = None,
+        app_id: Optional[str] = None,
+    ) -> "GPResult":
+        """
+        Execute a Fidesmo service delivery via fdsm --run.
+
+        Args:
+            reader: Reader name
+            service_id: Service ID to deliver
+            auth_token: Fidesmo API auth token
+            app_id: Fidesmo application ID
+
+        Returns:
+            GPResult with operation status
         """
         ...
 

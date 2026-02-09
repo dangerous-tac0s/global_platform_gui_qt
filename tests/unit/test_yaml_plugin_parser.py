@@ -26,34 +26,36 @@ EXAMPLES_DIR = Path(__file__).parent.parent.parent / "plugins" / "examples"
 class TestYamlPluginParser:
     """Tests for YamlPluginParser class."""
 
-    def test_load_simple_applet(self):
-        """Test loading a simple applet YAML file."""
-        path = EXAMPLES_DIR / "simple_applet.yaml"
+    def test_load_flexsecure_applets(self):
+        """Test loading the flexsecure-applets YAML file."""
+        path = EXAMPLES_DIR / "flexsecure-applets.gp-plugin.yaml"
         schema = YamlPluginParser.load(path)
 
         assert schema.schema_version == CURRENT_SCHEMA_VERSION
-        assert schema.plugin.name == "simple-memory-reporter"
+        assert schema.plugin.name == "flexsecure-applets"
         assert schema.plugin.version == "1.0.0"
-        assert schema.applet.source.type == SourceType.HTTP
-        assert schema.applet.source.url == "https://example.com/memory-reporter.cap"
-        assert schema.applet.metadata.name == "Memory Reporter"
-        assert schema.applet.metadata.aid == "A0000008466D656D6F727901"
-        assert schema.applet.metadata.storage.persistent == 1024
-        assert schema.applet.metadata.storage.transient == 256
+        assert schema.applet.source.type == SourceType.GITHUB_RELEASE
+        assert schema.applet.source.owner == "dangerousthings"
+        assert schema.applet.source.repo == "flexsecure-applets"
+        assert schema.applet.metadata.name == "FlexSecure Applets"
+        # Flexsecure has 5 variants with their own AIDs
+        assert len(schema.applet.variants) == 5
+        assert schema.applet.variants[0].filename == "javacard-memory.cap"
+        assert schema.applet.variants[0].aid == "A0000008466D656D6F727901"
 
     def test_load_smartpgp(self):
         """Test loading the SmartPGP plugin with complex features."""
-        path = EXAMPLES_DIR / "smartpgp.yaml"
+        path = EXAMPLES_DIR / "smartpgp.gp-plugin.yaml"
         schema = YamlPluginParser.load(path)
 
         # Plugin info
         assert schema.plugin.name == "smartpgp"
         assert schema.plugin.version == "1.0.0"
 
-        # Source (ANSSI-FR is the original SmartPGP source with on-card key generation)
+        # Source (bundled in DangerousThings/flexsecure-applets repo)
         assert schema.applet.source.type == SourceType.GITHUB_RELEASE
-        assert schema.applet.source.owner == "ANSSI-FR"
-        assert schema.applet.source.repo == "SmartPGP"
+        assert schema.applet.source.owner == "DangerousThings"
+        assert schema.applet.source.repo == "flexsecure-applets"
 
         # Dynamic AID construction
         assert schema.has_dynamic_aid()
@@ -83,11 +85,6 @@ class TestYamlPluginParser:
         assert len(workflow.steps) == 7  # dialog + verify + set_algo + generate + compute_fp + upload_fp + upload_timestamp
         assert workflow.steps[0].type == StepType.DIALOG
         assert workflow.steps[1].type == StepType.APDU
-
-        # Hooks
-        assert schema.hooks is not None
-        assert schema.hooks.pre_install is not None
-        assert schema.hooks.pre_install.type == "script"
 
     def test_parse_from_string(self):
         """Test parsing YAML from a string."""

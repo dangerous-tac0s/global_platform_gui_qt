@@ -25,6 +25,7 @@ src_imports = [
     'src.services',
     'src.services.gp_service',
     'src.services.storage_service',
+    'src.services.fdsm_service',
     'src.threads',
     'src.threads.nfc_thread',
     'src.threads.file_thread',
@@ -40,6 +41,7 @@ a = Analysis(
     datas=[
         ('gp.exe', '.'),                     # Native Windows GP executable
         ('gp.jar', '.'),                     # Fallback JAR (if Java available)
+        ('fdsm.jar', '.'),                   # FDSM Java tool
         ('plugins', 'plugins'),              # YAML plugin definitions
         ('favicon.ico', '.'),                # Application icon
     ],
