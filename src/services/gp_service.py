@@ -16,6 +16,11 @@ from pathlib import Path
 
 import chardet
 
+# Windows-specific: hide console window when running subprocesses
+_SUBPROCESS_FLAGS = {}
+if sys.platform == "win32":
+    _SUBPROCESS_FLAGS["creationflags"] = subprocess.CREATE_NO_WINDOW
+
 
 # Default key for new/unlocked cards
 DEFAULT_KEY = "404142434445464748494A4B4C4D4E4F"
@@ -181,6 +186,7 @@ class GPService:
                 text=True,
                 timeout=timeout,
                 cwd=self.working_dir,
+                **_SUBPROCESS_FLAGS,
             )
             # Only treat as error if returncode is non-zero or stderr has actual errors
             # (not just WARN messages which are common with GP)
@@ -477,6 +483,7 @@ class GPService:
                 text=True,
                 timeout=timeout,
                 cwd=self.working_dir,
+                **_SUBPROCESS_FLAGS,
             )
             has_real_error = result.stderr and not all(
                 line.strip().startswith("[WARN]") or not line.strip()
@@ -564,6 +571,7 @@ class GPService:
                 text=True,
                 timeout=30,
                 cwd=self.working_dir,
+                **_SUBPROCESS_FLAGS,
             )
             # Even if auth fails, CPLC might be in the output
             return self._parse_cplc_from_info(result.stdout)

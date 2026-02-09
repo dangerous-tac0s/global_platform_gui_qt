@@ -87,6 +87,9 @@ class MessageQueue(QWidget):
         "Uninstalling",  # "Uninstalling with {file}"
     )
 
+    # Padding above and below text content
+    VERTICAL_PADDING = 4
+
     def __init__(self, parent: Optional[QWidget] = None):
         """
         Initialize the animated message queue.
@@ -102,8 +105,8 @@ class MessageQueue(QWidget):
         # Currently visible messages
         self._visible_messages: List[AnimatedMessage] = []
 
-        # Setup the container
-        self.setMinimumHeight(20)
+        # Setup the container - use font-based minimum height for cross-platform compatibility
+        self._update_minimum_height()
 
         # Use a layout but we'll position items manually for animation
         self._layout = QHBoxLayout(self)
@@ -275,11 +278,13 @@ class MessageQueue(QWidget):
 
         # Position for slide-in animation (start off-screen to the right)
         start_x = self._message_container.width()
-        label.move(start_x, 0)
+        label_y = self._get_label_y_position(label)
+        label.move(start_x, label_y)
 
         if animated_msg.delimiter_label:
+            delim_y = self._get_label_y_position(animated_msg.delimiter_label)
             animated_msg.delimiter_label.move(
-                start_x - animated_msg.delimiter_label.width(), 0
+                start_x - animated_msg.delimiter_label.width(), delim_y
             )
 
         # Animate slide-in
@@ -298,10 +303,12 @@ class MessageQueue(QWidget):
             if msg.state == MessageState.EXITING:
                 continue
             if msg.delimiter_label:
-                msg.delimiter_label.move(x_pos, 0)
+                delim_y = self._get_label_y_position(msg.delimiter_label)
+                msg.delimiter_label.move(x_pos, delim_y)
                 x_pos += msg.delimiter_label.sizeHint().width()
             if msg.label:
-                msg.label.move(x_pos, 0)
+                label_y = self._get_label_y_position(msg.label)
+                msg.label.move(x_pos, label_y)
                 x_pos += msg.label.sizeHint().width()
 
     def _animate_slide_in(
@@ -317,9 +324,11 @@ class MessageQueue(QWidget):
         container_width = self._message_container.width()
         if container_width <= 0:
             if msg.label:
-                msg.label.move(target_x, 0)
+                label_y = self._get_label_y_position(msg.label)
+                msg.label.move(target_x, label_y)
             if msg.delimiter_label and delim_target_x is not None:
-                msg.delimiter_label.move(delim_target_x, 0)
+                delim_y = self._get_label_y_position(msg.delimiter_label)
+                msg.delimiter_label.move(delim_target_x, delim_y)
             msg.state = MessageState.VISIBLE
             # Defer _try_show_next_message until after _show_message completes
             # and appends this message to _visible_messages
@@ -329,18 +338,20 @@ class MessageQueue(QWidget):
         anim_group = QParallelAnimationGroup(self)
 
         if msg.label:
+            label_y = self._get_label_y_position(msg.label)
             label_anim = QPropertyAnimation(msg.label, b"pos", self)
             label_anim.setDuration(self.ANIMATION_DURATION_MS)
             label_anim.setStartValue(msg.label.pos())
-            label_anim.setEndValue(QPoint(target_x, 0))
+            label_anim.setEndValue(QPoint(target_x, label_y))
             label_anim.setEasingCurve(QEasingCurve.OutCubic)
             anim_group.addAnimation(label_anim)
 
         if msg.delimiter_label and delim_target_x is not None:
+            delim_y = self._get_label_y_position(msg.delimiter_label)
             delim_anim = QPropertyAnimation(msg.delimiter_label, b"pos", self)
             delim_anim.setDuration(self.ANIMATION_DURATION_MS)
             delim_anim.setStartValue(msg.delimiter_label.pos())
-            delim_anim.setEndValue(QPoint(delim_target_x, 0))
+            delim_anim.setEndValue(QPoint(delim_target_x, delim_y))
             delim_anim.setEasingCurve(QEasingCurve.OutCubic)
             anim_group.addAnimation(delim_anim)
 
@@ -361,12 +372,13 @@ class MessageQueue(QWidget):
 
         anim_group = QParallelAnimationGroup(self)
 
-        # Slide to the left
+        # Slide to the left - maintain current y position for smooth exit
         if msg.label:
+            current_y = msg.label.pos().y()
             label_anim = QPropertyAnimation(msg.label, b"pos", self)
             label_anim.setDuration(self.ANIMATION_DURATION_MS)
             label_anim.setStartValue(msg.label.pos())
-            label_anim.setEndValue(QPoint(-msg.label.width(), 0))
+            label_anim.setEndValue(QPoint(-msg.label.width(), current_y))
             label_anim.setEasingCurve(QEasingCurve.InOutCubic)
             anim_group.addAnimation(label_anim)
 
@@ -380,10 +392,11 @@ class MessageQueue(QWidget):
                 anim_group.addAnimation(fade_anim)
 
         if msg.delimiter_label:
+            delim_y = msg.delimiter_label.pos().y()
             delim_anim = QPropertyAnimation(msg.delimiter_label, b"pos", self)
             delim_anim.setDuration(self.ANIMATION_DURATION_MS)
             delim_anim.setStartValue(msg.delimiter_label.pos())
-            delim_anim.setEndValue(QPoint(-msg.delimiter_label.width() - msg.label.width() if msg.label else 0, 0))
+            delim_anim.setEndValue(QPoint(-msg.delimiter_label.width() - msg.label.width() if msg.label else 0, delim_y))
             delim_anim.setEasingCurve(QEasingCurve.InOutCubic)
             anim_group.addAnimation(delim_anim)
 
@@ -423,29 +436,33 @@ class MessageQueue(QWidget):
             # The first (oldest) visible message shouldn't have a delimiter
             # If it does, slide it off to the left and mark for removal
             if is_first and msg.delimiter_label:
+                # Keep current y position when sliding off-screen
+                current_y = msg.delimiter_label.pos().y()
                 anim = QPropertyAnimation(msg.delimiter_label, b"pos", self)
                 anim.setDuration(self.ANIMATION_DURATION_MS)
                 anim.setStartValue(msg.delimiter_label.pos())
-                anim.setEndValue(QPoint(-msg.delimiter_label.width(), 0))
+                anim.setEndValue(QPoint(-msg.delimiter_label.width(), current_y))
                 anim.setEasingCurve(QEasingCurve.InOutCubic)
                 anim_group.addAnimation(anim)
                 delimiters_to_remove.append((msg, msg.delimiter_label))
             elif msg.delimiter_label:
+                delim_y = self._get_label_y_position(msg.delimiter_label)
                 if msg.delimiter_label.x() != x_pos:
                     anim = QPropertyAnimation(msg.delimiter_label, b"pos", self)
                     anim.setDuration(self.ANIMATION_DURATION_MS)
                     anim.setStartValue(msg.delimiter_label.pos())
-                    anim.setEndValue(QPoint(x_pos, 0))
+                    anim.setEndValue(QPoint(x_pos, delim_y))
                     anim.setEasingCurve(QEasingCurve.InOutCubic)
                     anim_group.addAnimation(anim)
                 x_pos += msg.delimiter_label.sizeHint().width()
 
             if msg.label:
+                label_y = self._get_label_y_position(msg.label)
                 if msg.label.x() != x_pos:
                     anim = QPropertyAnimation(msg.label, b"pos", self)
                     anim.setDuration(self.ANIMATION_DURATION_MS)
                     anim.setStartValue(msg.label.pos())
-                    anim.setEndValue(QPoint(x_pos, 0))
+                    anim.setEndValue(QPoint(x_pos, label_y))
                     anim.setEasingCurve(QEasingCurve.InOutCubic)
                     anim_group.addAnimation(anim)
                 x_pos += msg.label.sizeHint().width()
@@ -559,9 +576,35 @@ class MessageQueue(QWidget):
         super().resizeEvent(event)
         self._try_show_next_message()
 
+    def changeEvent(self, event) -> None:
+        """Handle font changes to update minimum height."""
+        super().changeEvent(event)
+        from PyQt5.QtCore import QEvent
+        if event.type() == QEvent.FontChange:
+            self._update_minimum_height()
+
+    def _update_minimum_height(self) -> None:
+        """Update minimum height based on current font metrics."""
+        font_metrics = QFontMetrics(self.font())
+        text_height = font_metrics.height()
+        min_height = text_height + (self.VERTICAL_PADDING * 2)
+        self.setMinimumHeight(min_height)
+
+    def _get_content_height(self) -> int:
+        """Calculate the content height based on font metrics."""
+        font_metrics = QFontMetrics(self.font())
+        return font_metrics.height() + (self.VERTICAL_PADDING * 2)
+
+    def _get_label_y_position(self, label: QLabel) -> int:
+        """Calculate the vertical position to center a label in the container."""
+        container_height = self._message_container.height()
+        label_height = label.sizeHint().height()
+        # Center vertically, with a minimum of 0
+        return max(0, (container_height - label_height) // 2)
+
     def sizeHint(self) -> QSize:
-        """Return the preferred size."""
-        return QSize(200, 24)
+        """Return the preferred size based on font metrics."""
+        return QSize(200, self._get_content_height())
 
 
 class StatusBar(QWidget):

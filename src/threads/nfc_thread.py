@@ -15,6 +15,11 @@ import zipfile
 from threading import Event
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
+# Windows-specific: hide console window when running subprocesses
+_SUBPROCESS_FLAGS = {}
+if sys.platform == "win32":
+    _SUBPROCESS_FLAGS["creationflags"] = subprocess.CREATE_NO_WINDOW
+
 import chardet
 from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot
 from smartcard.System import readers
@@ -393,7 +398,7 @@ class NFCHandlerThread(QThread):
             ):
                 return False  # Protect unknown tags
             cmd = [*self.gp[os.name][0], "-k", self.key, "--info", "-r", reader_name]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, **_SUBPROCESS_FLAGS)
             return "JavaCard v3" in result.stdout
         except Exception:
             return False
@@ -698,6 +703,7 @@ class NFCHandlerThread(QThread):
                     *command,
                 ],
                 capture_output=True,
+                **_SUBPROCESS_FLAGS,
             )
 
             stdout = result.stdout.decode()
@@ -752,6 +758,7 @@ class NFCHandlerThread(QThread):
                     *command,
                 ],
                 capture_output=True,
+                **_SUBPROCESS_FLAGS,
             )
 
             stdout = result.stdout.decode()
@@ -960,7 +967,7 @@ class NFCHandlerThread(QThread):
             if params and "param_string" in params:
                 cmd.extend(["--params", *params["param_string"].split(" ")])
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, **_SUBPROCESS_FLAGS)
 
             if result.returncode == 0:
                 installed = self.get_installed_apps(_internal=True)
@@ -1021,7 +1028,7 @@ class NFCHandlerThread(QThread):
             if force:
                 cmd.append("-f")
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, **_SUBPROCESS_FLAGS)
 
             if len(result.stderr) == 0:
                 self._emit_operation_result(True, f"Uninstalled {aid}")
@@ -1085,7 +1092,7 @@ class NFCHandlerThread(QThread):
                 cmd.append("-f")
             cmd.extend([cap_file_path, "-r", self.selected_reader_name])
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, **_SUBPROCESS_FLAGS)
             if result.returncode == 0:
                 installed = self.get_installed_apps(_internal=True)
                 self.installed_apps_updated_signal.emit(installed)

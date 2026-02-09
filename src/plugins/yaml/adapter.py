@@ -403,6 +403,12 @@ class YamlPluginAdapter:
     def _execute_hook_command(self, command: list[str], context: dict):
         """Execute a shell command hook."""
         import subprocess
+        import sys
+
+        # Windows-specific: hide console window when running subprocesses
+        subprocess_flags = {}
+        if sys.platform == "win32":
+            subprocess_flags["creationflags"] = subprocess.CREATE_NO_WINDOW
 
         # Substitute variables in command
         processed_cmd = []
@@ -418,6 +424,7 @@ class YamlPluginAdapter:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                **subprocess_flags,
             )
             if result.returncode != 0:
                 raise RuntimeError(f"Command failed: {result.stderr}")

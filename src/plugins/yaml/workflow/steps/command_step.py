@@ -6,11 +6,17 @@ Executes shell commands with restricted allowlist.
 
 import subprocess
 import shlex
+import sys
 from typing import Any, Optional
 
 from ..context import WorkflowContext
 from .base import BaseStep, StepResult, StepError
 from ...encoding.encoder import TemplateProcessor
+
+# Windows-specific: hide console window when running subprocesses
+_SUBPROCESS_FLAGS = {}
+if sys.platform == "win32":
+    _SUBPROCESS_FLAGS["creationflags"] = subprocess.CREATE_NO_WINDOW
 
 
 # Whitelist of allowed commands
@@ -90,6 +96,7 @@ class CommandStep(BaseStep):
                 text=True,
                 timeout=self.timeout,
                 cwd=str(context.temp_dir),
+                **_SUBPROCESS_FLAGS,
             )
 
             if result.returncode != 0:
