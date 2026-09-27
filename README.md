@@ -63,7 +63,7 @@ Looking for more information? Check out the [flexSecure repo docs](https://githu
 
 ### Binary
 
-Check the [latest release](https://github.com/DangerousThings/global-platform-gui/releases) for pre-built binaries:
+Check the [latest release](https://github.com/dangerous-tac0s/global_platform_gui_qt/releases) for pre-built binaries:
 - **Linux**: AppImage
 - **Windows**: Portable executable
 - **macOS**: DMG with signed app bundle
@@ -80,8 +80,8 @@ Requirements:
 
 ```bash
 # Clone the repository
-git clone https://github.com/DangerousThings/global-platform-gui.git
-cd global-platform-gui
+git clone https://github.com/dangerous-tac0s/global_platform_gui_qt.git
+cd global_platform_gui_qt
 
 # Create virtual environment
 python -m venv venv
